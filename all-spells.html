@@ -1625,7 +1625,7 @@ function toggleRow(tr){var n=tr.nextElementSibling;tr.classList.toggle('active')
 function showTab(btn,which,id){var c=btn.closest('.dtabs');c.querySelectorAll('.tb').forEach(function(b){b.classList.remove('active');});c.querySelectorAll('.tc').forEach(function(t){t.classList.remove('active');});btn.classList.add('active');var el=document.getElementById(which+'_'+id);if(el)el.classList.add('active');}
 var lo={Cantrip:0};for(var i=1;i<=9;i++)lo[i]=i;
 var sC=-1,sD=1;
-function sortTable(col){var ths=document.querySelectorAll('thead th');ths.forEach(function(h){h.classList.remove('asc','desc');});if(sC===col)sD*=-1;else{sC=col;sD=1;}ths[col].classList.add(sD===1?'asc':'desc');var tb=document.getElementById('tbody');var rows=Array.from(tb.querySelectorAll('tr:not(.desc-row)'));rows.sort(function(a,b){var av=a.cells[col].innerText.replace(/[✓⚠★??]/g,'').trim();var bv=b.cells[col].innerText.replace(/[✓⚠★??]/g,'').trim();if(col===1)return((lo[av]!==undefined?lo[av]:99)-(lo[bv]!==undefined?lo[bv]:99))*sD;return av.localeCompare(bv)*sD;});rows.forEach(function(r){var d=r.nextElementSibling;tb.appendChild(r);if(d&&d.classList.contains('desc-row'))tb.appendChild(d);});}
+function sortTable(col){var ths=document.querySelectorAll('thead th');ths.forEach(function(h){h.classList.remove('asc','desc');});if(sC===col)sD*=-1;else{sC=col;sD=1;}ths[col].classList.add(sD===1?'asc':'desc');var tb=document.getElementById('tbody');var rows=Array.from(tb.querySelectorAll(':scope > tr:not(.desc-row)'));rows.sort(function(a,b){var av=a.cells[col].innerText.replace(/[✓⚠★??]/g,'').trim();var bv=b.cells[col].innerText.replace(/[✓⚠★??]/g,'').trim();if(col===1)return((lo[av]!==undefined?lo[av]:99)-(lo[bv]!==undefined?lo[bv]:99))*sD;return av.localeCompare(bv)*sD;});rows.forEach(function(r){var d=r.nextElementSibling;tb.appendChild(r);if(d&&d.classList.contains('desc-row'))tb.appendChild(d);});}
 
 function applyFilters(){
   var q=document.getElementById('search').value.toLowerCase();
@@ -1636,7 +1636,7 @@ function applyFilters(){
   var nc=document.getElementById('fNoConc').checked;
   var ri=document.getElementById('fRitual').checked;
   var vis=0;
-  document.querySelectorAll('#tbody tr:not(.desc-row)').forEach(function(row){
+  document.querySelectorAll('#tbody > tr:not(.desc-row)').forEach(function(row){
     var show=true;
     if(q&&row.dataset.search.indexOf(q)===-1)show=false;
     if(lv&&row.dataset.level!==lv)show=false;
