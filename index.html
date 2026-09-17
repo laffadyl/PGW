@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>D&amp;D Campaign — Jeff's Living Room</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #0e0e14; color: #ddd; font-family: 'Segoe UI', sans-serif; font-size: 14px; }
+    h1 { text-align: center; color: #a78bfa; padding: 24px 18px 6px; font-size: 1.5rem; letter-spacing: 2px; }
+    h1 span { color: #6d28d9; }
+    .subtitle { text-align: center; color: #555; font-size: 12px; padding-bottom: 24px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; padding: 0 20px 40px; max-width: 900px; margin: 0 auto; }
+    .card { background: #15151e; border: 1px solid #2a2a3a; border-radius: 10px; overflow: hidden; transition: border-color 0.15s; }
+    .card:hover { border-color: #6d28d9; }
+    .card-header { background: #1a1a2e; padding: 12px 16px; display: flex; align-items: center; gap: 10px; }
+    .card-icon { font-size: 1.3rem; }
+    .card-title { color: #a78bfa; font-size: 0.95rem; font-weight: 600; letter-spacing: 0.5px; }
+    .card-body { padding: 10px 16px 16px; }
+    .card-desc { color: #777; font-size: 12px; margin-bottom: 12px; line-height: 1.5; }
+    .btn { display: block; background: #1e1e2e; border: 1px solid #3a3a5a; color: #c4b5fd; padding: 9px 14px; border-radius: 6px; text-decoration: none; font-size: 13px; text-align: center; margin-bottom: 8px; transition: background 0.15s, border-color 0.15s; }
+    .btn:last-child { margin-bottom: 0; }
+    .btn:hover { background: #2a1a4a; border-color: #6d28d9; color: #fff; }
+    .btn-primary { background: #2a1a4a; border-color: #6d28d9; }
+    .tag { display: inline-block; font-size: 10px; font-weight: bold; padding: 1px 5px; border-radius: 3px; margin-left: 6px; vertical-align: middle; background: #1e3a5f; color: #60a5fa; }
+  </style>
+</head>
+<body>
+  <h1>🎲 D&amp;D Campaign — <span>Jeff's Living Room</span></h1>
+  <p class="subtitle">Bladesinger Campaign · 5e / 2024</p>
+
+  <div class="grid">
+
+    <div class="card">
+      <div class="card-header">
+        <span class="card-icon">🧙</span>
+        <span class="card-title">Nyx — Character Sheet</span>
+      </div>
+      <div class="card-body">
+        <p class="card-desc">Wizard (Bladesinger) 8, Eladrin (Winter), Lawful Evil. Full stats, skills, spells, and inventory.</p>
+        <a class="btn btn-primary" href="character-sheet.html">Open Character Sheet</a>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <span class="card-icon">✨</span>
+        <span class="card-title">Spells</span>
+      </div>
+      <div class="card-body">
+        <p class="card-desc">Filterable spell tables with 5e vs 2024 comparison. Search by level, school, class, and edition changes.</p>
+        <a class="btn btn-primary" href="all-spells.html">All Spells <span class="tag">5e vs 2024</span></a>
+        <a class="btn" href="wizard-spells.html">Wizard Spells</a>
+        <a class="btn" href="spell-candidates.html">Spell Candidates</a>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <span class="card-icon">⚔️</span>
+        <span class="card-title">Feats</span>
+      </div>
+      <div class="card-body">
+        <p class="card-desc">All feats with 5e vs 2024 comparison. Filter by type, source, and edition status.</p>
+        <a class="btn btn-primary" href="feats.html">All Feats <span class="tag">5e vs 2024</span></a>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <span class="card-icon">📈</span>
+        <span class="card-title">Class Progression</span>
+      </div>
+      <div class="card-body">
+        <p class="card-desc">Wizard Bladesinger level-by-level progression, features, and spell slots.</p>
+        <a class="btn btn-primary" href="wizard-bladesinger-progression.html">Bladesinger Progression</a>
+      </div>
+    </div>
+
+
+    <div class="card">
+      <div class="card-header">
+        <span class="card-icon">🐉</span>
+        <span class="card-title">Monsters</span>
+      </div>
+      <div class="card-body">
+        <p class="card-desc">1,400+ monsters with CR, AC, HP, speed, ability scores, and type filters. Paginated for performance.</p>
+        <a class="btn btn-primary" href="monsters.html">Monster Reference</a>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <span class="card-icon">⚔️</span>
+        <span class="card-title">Weapons</span>
+      </div>
+      <div class="card-body">
+        <p class="card-desc">All weapons with damage, properties, cost, and weight. Filter by Simple/Martial and type.</p>
+        <a class="btn btn-primary" href="weapons.html">Weapon Reference</a>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <span class="card-icon">🛡️</span>
+        <span class="card-title">Armor</span>
+      </div>
+      <div class="card-body">
+        <p class="card-desc">All armor with base AC, STR requirement, stealth disadvantage, cost, and weight.</p>
+        <a class="btn btn-primary" href="armor.html">Armor Reference</a>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <span class="card-icon">💎</span>
+        <span class="card-title">Items &amp; Equipment</span>
+      </div>
+      <div class="card-body">
+        <p class="card-desc">700+ items with rarity, magic, attunement, and curse filters. Click to expand descriptions.</p>
+        <a class="btn btn-primary" href="items.html">Item Reference</a>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <span class="card-icon">⚠️</span>
+        <span class="card-title">Conditions</span>
+      </div>
+      <div class="card-body">
+        <p class="card-desc">All 15 standard 5e conditions with full descriptions from the SRD. Click to expand.</p>
+        <a class="btn btn-primary" href="conditions.html">Conditions Reference</a>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <span class="card-icon">📜</span>
+        <span class="card-title">Backgrounds</span>
+      </div>
+      <div class="card-body">
+        <p class="card-desc">All backgrounds with skill proficiencies, tool proficiencies, and feature names.</p>
+        <a class="btn btn-primary" href="backgrounds.html">Backgrounds Reference</a>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <span class="card-icon">🧝</span>
+        <span class="card-title">Races</span>
+      </div>
+      <div class="card-body">
+        <p class="card-desc">All races with ability score increases, traits, and subraces. Click to expand trait details.</p>
+        <a class="btn btn-primary" href="races.html">Races Reference</a>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <span class="card-icon">⚡</span>
+        <span class="card-title">Classes</span>
+      </div>
+      <div class="card-body">
+        <p class="card-desc">All classes with hit die, spellcasting ability, saving throws, and subclass list.</p>
+        <a class="btn btn-primary" href="classes.html">Classes Reference</a>
+      </div>
+    </div>
+
+  </div>
+</body>
+</html>
