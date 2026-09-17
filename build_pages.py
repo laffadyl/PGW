@@ -1,1200 +1,981 @@
 #!/usr/bin/env python3
 """Build 8 D&D 5e reference HTML pages for the PGW site."""
 
-import json, glob, os, re, html as html_mod
+import json, glob, os, re
 from pathlib import Path
 
-BASE = Path('/Users/dylan/.openclaw/workspace/dnd/systems/5e/resource_instances')
-OUT  = Path('/Users/dylan/.openclaw/workspace/dnd')
-SRD  = Path('/Users/dylan/.openclaw/workspace/dnd/srd')
+BASE = Path('/Users/dylan/.openclaw/workspace/dnd')
+DATA_DIR = BASE / 'systems/5e/resource_instances'
+SRD_DIR  = BASE / 'srd'
 
-# ─── Helpers ──────────────────────────────────────────────────────────────────
-
-def sv(d, *keys):
-    """Walk nested stats dicts and return .value at the final key."""
-    for k in keys:
-        if isinstance(d, dict): d = d.get(k, {})
-        else: return None
-    return d.get('value') if isinstance(d, dict) else d
+# ─── helpers ───────────────────────────────────────────────────────────────
 
 def esc(s):
-    return html_mod.escape(str(s)) if s is not None else ''
+    return str(s).replace('&','&amp;').replace('<','&lt;').replace('>','&gt;').replace('"','&quot;')
 
-def js_str(s):
-    """Escape a Python string for embedding in a JS string literal."""
-    s = str(s) if s is not None else ''
-    return s.replace('\\','\\\\').replace("'","\\'").replace('\n','\\n').replace('\r','')
+def gv(d, *path, default=''):
+    for k in path:
+        if not isinstance(d, dict):
+            return default
+        d = d.get(k, {})
+    if isinstance(d, dict):
+        v = d.get('value')
+        return v if v is not None else default
+    return default
 
-def get_weight(stats):
-    w = stats.get('weight', {})
-    if not isinstance(w, dict): return '—'
-    wv = w.get('value')
-    if isinstance(wv, (int, float)): return str(wv)
-    if isinstance(wv, dict) and 'stats' in wv:
-        val = wv['stats'].get('value', {})
-        if isinstance(val, dict): val = val.get('value')
-        if val is not None: return str(val)
-    return '—'
-
-def get_cost(stats):
-    c = stats.get('cost', {})
-    if not isinstance(c, dict): return '—'
-    cv = c.get('value')
-    if isinstance(cv, dict) and 'stats' in cv:
-        cs = cv['stats']
-        amt = cs.get('value', {})
-        if isinstance(amt, dict): amt = amt.get('value')
-        unit = cs.get('unit', {})
-        if isinstance(unit, dict): unit = unit.get('value', 'gp')
-        else: unit = 'gp'
-        if amt is not None: return f"{amt} {unit}"
-    elif isinstance(cv, (int, float, str)): return str(cv)
-    return '—'
-
-def fmt_cr(cr_str):
-    if not cr_str: return '—'
-    s = cr_str.replace('cr_', '')
-    return {'0':'0','1_8':'1/8','1_4':'1/4','1_2':'1/2'}.get(s, s)
-
-def cr_num(cr_str):
-    if not cr_str: return 99
-    m = {'cr_0':0,'cr_1_8':0.125,'cr_1_4':0.25,'cr_1_2':0.5}
-    if cr_str in m: return m[cr_str]
-    try: return float(cr_str.replace('cr_',''))
-    except: return 99
-
-def hp_dice(hp_obj):
-    if not isinstance(hp_obj, dict): return str(hp_obj) if hp_obj else '—'
+def load_json(fp):
     try:
-        s = hp_obj['stats']
-        da = s['dice_amount']['value']
-        dt = s['dice_type']['value']
-        c  = (s.get('constant') or {}).get('value', 0) or 0
-        if c > 0: return f"{da}{dt}+{c}"
-        if c < 0: return f"{da}{dt}{c}"
-        return f"{da}{dt}"
-    except: return '—'
+        with open(fp, encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return None
 
-def ab_mod(score):
-    if score is None: return ''
-    m = (int(score) - 10) // 2
-    return f"+{m}" if m >= 0 else str(m)
+def cost_str(stats):
+    c = (stats.get('cost') or {}).get('value', {})
+    if isinstance(c, dict):
+        cs = c.get('stats', {})
+        v = ((cs.get('value') or {}).get('value') or 0)
+        u = ((cs.get('unit') or {}).get('value') or '')
+        if v:
+            sh = {'gold':'gp','silver':'sp','copper':'cp',
+                  'electrum':'ep','platinum':'pp'}.get(str(u), str(u))
+            return f"{int(v)} {sh}"
+    return ''
 
-def load_all(pattern):
-    result = []
-    for fp in sorted(glob.glob(str(BASE / pattern))):
-        try:
-            with open(fp) as f: result.append(json.load(f))
-        except: pass
-    return result
+def weight_str(stats):
+    w = (stats.get('weight') or {}).get('value', {})
+    if isinstance(w, dict):
+        ws = w.get('stats', {})
+        v = ((ws.get('value') or {}).get('value') or 0)
+        if v:
+            return f"{float(v):g} lb"
+    return ''
 
-# ─── Common HTML fragments ─────────────────────────────────────────────────────
+def cr_disp(cr):
+    if not cr: return ''
+    s = str(cr).replace('cr_', '')
+    return {'1_8':'1/8','1_4':'1/4','1_2':'1/2','0':'0'}.get(s, s)
 
-PAGE_CSS = ("*{box-sizing:border-box;margin:0;padding:0}"
-"body{background:#0e0e14;color:#ddd;font-family:'Segoe UI',sans-serif;font-size:14px}"
-"h1{text-align:center;color:#a78bfa;padding:18px;font-size:1.4rem;letter-spacing:2px}"
-"h1 span{color:#6d28d9}"
-".filters{display:flex;flex-wrap:wrap;gap:9px;padding:12px 18px;background:#15151e;border-bottom:1px solid #2a2a3a;align-items:center}"
-".filters input,.filters select{background:#1e1e2e;border:1px solid #3a3a5a;color:#ddd;padding:6px 10px;border-radius:6px;font-size:13px}"
-".filters input{width:210px}"
-".filters input:focus,.filters select:focus{outline:none;border-color:#7c3aed}"
-".count{margin-left:auto;color:#666;font-size:12px;white-space:nowrap}"
-".table-wrap{overflow-x:auto;padding:0 10px 40px}"
-"table{width:100%;border-collapse:collapse;margin-top:10px}"
-"thead th{background:#1a1a2e;color:#a78bfa;font-size:11px;text-transform:uppercase;letter-spacing:1px;padding:9px 11px;text-align:left;cursor:pointer;border-bottom:2px solid #3a2a6a;white-space:nowrap;user-select:none}"
-"thead th:hover{color:#c4b5fd}"
-"thead th.asc::after{content:' \u25b2'}"
-"thead th.desc::after{content:' \u25bc'}"
-"tbody tr:not(.desc-row){cursor:pointer;border-bottom:1px solid #1a1a28}"
-"tbody tr:not(.desc-row):hover{background:#1a1a2e}"
-"tbody tr:not(.desc-row).active{background:#1e1530}"
-"td{padding:8px 11px;vertical-align:middle}"
-"td:first-child{color:#e2d9f3}"
-".desc-row td{padding:0;background:#0d0d18}"
-".desc-row{display:none}"
-".desc-content{padding:12px 18px;border-left:3px solid #6d28d9;margin:4px 10px 10px;border-radius:0 6px 6px 0;font-size:13px;color:#bbb;line-height:1.6}"
-".back{display:block;color:#7c3aed;font-size:12px;padding:8px 18px;text-decoration:none;width:fit-content}"
-".back:hover{color:#a78bfa}"
-".pager{display:flex;gap:6px;padding:8px 18px;align-items:center;flex-wrap:wrap}"
-".pager button{background:#1e1e2e;border:1px solid #3a3a5a;color:#888;padding:4px 10px;border-radius:4px;cursor:pointer;font-size:12px}"
-".pager button:hover,.pager button.on{background:#2a1a4a;border-color:#6d28d9;color:#c4b5fd}"
-".pager .pi{color:#666;font-size:12px}"
-".ab-grid{display:grid;grid-template-columns:repeat(6,1fr);gap:6px;max-width:420px}"
-".ab-cell{text-align:center;background:#1a1a2e;border-radius:4px;padding:4px}"
-".ab-label{font-size:10px;color:#888;text-transform:uppercase}"
-".ab-val{font-size:14px;color:#e2d9f3}"
-".ab-mod{font-size:11px;color:#a78bfa}"
-"span.nd{color:#555}"
+def cr_num(cr):
+    sp = {'cr_0':0,'cr_1_8':0.125,'cr_1_4':0.25,'cr_1_2':0.5}
+    if cr in sp: return sp[cr]
+    try: return float(str(cr).replace('cr_', ''))
+    except: return 999
+
+def abmod(n):
+    try:
+        m = (int(n) - 10) // 2
+        return f"+{m}" if m >= 0 else str(m)
+    except: return '+0'
+
+# ─── shared CSS / page wrapper ─────────────────────────────────────────────
+
+CSS = (
+    "*{box-sizing:border-box;margin:0;padding:0}"
+    "body{background:#0e0e14;color:#ddd;font-family:'Segoe UI',sans-serif;font-size:14px}"
+    "h1{text-align:center;color:#a78bfa;padding:18px;font-size:1.4rem;letter-spacing:2px}"
+    "h1 span{color:#6d28d9}"
+    ".filters{display:flex;flex-wrap:wrap;gap:9px;padding:12px 18px;"
+    "background:#15151e;border-bottom:1px solid #2a2a3a;align-items:center}"
+    ".filters input,.filters select{background:#1e1e2e;border:1px solid #3a3a5a;"
+    "color:#ddd;padding:6px 10px;border-radius:6px;font-size:13px}"
+    ".filters input{width:200px}"
+    ".filters input:focus,.filters select:focus{outline:none;border-color:#7c3aed}"
+    ".count{margin-left:auto;color:#666;font-size:12px;white-space:nowrap}"
+    ".table-wrap{overflow-x:auto;padding:0 10px 40px}"
+    "table{width:100%;border-collapse:collapse;margin-top:10px}"
+    "thead th{background:#1a1a2e;color:#a78bfa;font-size:11px;text-transform:uppercase;"
+    "letter-spacing:1px;padding:9px 11px;text-align:left;cursor:pointer;"
+    "border-bottom:2px solid #3a2a6a;white-space:nowrap;user-select:none}"
+    "thead th:hover{color:#c4b5fd}"
+    "thead th.asc::after{content:' \u25b2'}thead th.desc::after{content:' \u25bc'}"
+    "tbody tr:not(.desc-row){cursor:pointer;border-bottom:1px solid #1a1a28}"
+    "tbody tr:not(.desc-row):hover{background:#1a1a2e}"
+    "tbody tr:not(.desc-row).active{background:#1e1530}"
+    "td{padding:8px 11px;vertical-align:middle}"
+    "td:first-child{color:#e2d9f3}"
+    ".desc-row td{padding:0;background:#0d0d18}"
+    ".desc-content{padding:12px 18px;border-left:3px solid #6d28d9;"
+    "margin:4px 10px 10px;border-radius:0 6px 6px 0;"
+    "font-size:13px;color:#bbb;line-height:1.6;white-space:pre-wrap}"
+    ".back{display:block;text-align:center;padding:10px;color:#7c3aed;"
+    "font-size:13px;text-decoration:none}.back:hover{color:#a78bfa}"
+    ".pgn{display:flex;gap:6px;justify-content:center;padding:10px;flex-wrap:wrap}"
+    ".pgn button{background:#1e1e2e;border:1px solid #3a3a5a;color:#888;"
+    "padding:4px 12px;border-radius:4px;cursor:pointer;font-size:12px}"
+    ".pgn button.act{background:#2a1a4a;color:#c4b5fd;border-color:#6d28d9}"
+    ".tag{display:inline-block;font-size:10px;font-weight:bold;padding:2px 5px;"
+    "border-radius:4px;background:#1e3a5f;color:#60a5fa;margin-left:3px}"
+    ".ck{color:#4ade80}.cx{color:#555}"
 )
 
-SORT_JS = """var _sc=-1,_sa=true;
-function sortBy(col){
-  document.querySelectorAll('thead th').forEach(function(t){t.classList.remove('asc','desc');});
-  if(_sc===col){_sa=!_sa;}else{_sc=col;_sa=true;}
-  document.querySelectorAll('thead th')[col].classList.add(_sa?'asc':'desc');
-  applyFilters();
-}
-function toggleRow(tr){
-  var next=tr.nextElementSibling;
-  if(!next||!next.classList.contains('desc-row'))return;
-  var was=tr.classList.contains('active');
-  document.querySelectorAll('tbody tr.active').forEach(function(r){r.classList.remove('active');});
-  document.querySelectorAll('.desc-row').forEach(function(r){r.style.display='none';});
-  if(!was){tr.classList.add('active');next.style.display='';}
+# Shared JS sort engine (injected into each page's <script>)
+JS_SORT = """
+let sC=-1,sA=true;
+function srt(c){
+  if(sC===c)sA=!sA;else{sC=c;sA=true;}
+  F.sort((a,b)=>{
+    let va=SK[c](a),vb=SK[c](b);
+    if(typeof va==='number'&&typeof vb==='number')return sA?(va-vb):(vb-va);
+    va=String(va);vb=String(vb);
+    return sA?va.localeCompare(vb,void 0,{numeric:true}):vb.localeCompare(va,void 0,{numeric:true});
+  });
+  document.querySelectorAll('thead th').forEach((th,i)=>th.className=i===sC?(sA?'asc':'desc'):'');
+  open=-1;render();
 }
 """
 
-def page_head(title, icon, subtitle=''):
-    s = f'<p style="text-align:center;color:#555;font-size:12px;padding-bottom:12px">{esc(subtitle)}</p>' if subtitle else ''
-    return (f'<!DOCTYPE html><html lang="en"><head>'
-            f'<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
+def page(title, icon, filters_html, thead_html, script, pagination=''):
+    return (f'<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">'
+            f'<meta name="viewport" content="width=device-width,initial-scale=1">'
             f'<title>{esc(title)}</title>'
-            f'<style>{PAGE_CSS}</style></head><body>'
-            f'<a class="back" href="index.html">\u2190 Back to Index</a>'
-            f'<h1>{icon} {esc(title)}</h1>{s}')
+            f'<style>{CSS}</style></head><body>\n'
+            f'<h1>{icon} {esc(title)}</h1>\n'
+            f'<a class="back" href="index.html">&larr; Back to Campaign Hub</a>\n'
+            f'<div class="filters">{filters_html}'
+            f'<span class="count" id="cnt"></span></div>\n'
+            f'<div class="table-wrap"><table>'
+            f'<thead><tr>{thead_html}</tr></thead>'
+            f'<tbody id="tb"></tbody></table></div>'
+            f'{pagination}\n'
+            f'<script>function esc(s){{return String(s)'
+            f".replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}}\n"
+            f'{script}</script></body></html>')
 
-def nd(s): return f'<span class="nd">{esc(s)}</span>'
+def th(labels):
+    return ''.join(f'<th onclick="srt({i})">{h}</th>' for i, h in enumerate(labels))
 
-# ─── 1. MONSTERS ──────────────────────────────────────────────────────────────
+def sel_opts(values, current_val='', label_fn=None):
+    out = []
+    for v in values:
+        lbl = label_fn(v) if label_fn else str(v)
+        sel = ' selected' if v == current_val else ''
+        out.append(f'<option value="{esc(v)}"{sel}>{esc(lbl)}</option>')
+    return ''.join(out)
+
+# ─── 1. monsters ───────────────────────────────────────────────────────────
 
 def build_monsters():
-    print("Building monsters.html...")
-    rows = load_all('monster_*.json')
-    data = []
-    sources = set()
-    cr_vals = set()
-    types = set()
-    for d in rows:
-        s = d['stats']
-        name   = sv(s,'name') or ''
-        source = sv(s,'source') or 'SRD'
-        cr_raw = sv(s,'cr') or ''
-        cr_fmt = fmt_cr(cr_raw)
-        cr_n   = cr_num(cr_raw)
-        mtype  = sv(s,'type') or ''
-        tag    = sv(s,'tag') or ''
-        ac     = sv(s,'armor_class') or ''
-        hp_obj = sv(s,'hit_points')
-        hp     = hp_dice(hp_obj) if isinstance(hp_obj, dict) else (str(hp_obj) if hp_obj else '—')
-        spd    = sv(s,'speed') or 0
-        fly    = sv(s,'fly_speed') or 0
-        swim   = sv(s,'swim_speed') or 0
-        bur    = sv(s,'burrow_speed') or 0
-        cli    = sv(s,'climb_speed') or 0
-        xp     = sv(s,'xp') or 0
-        str_   = sv(s,'strength_score')
-        dex_   = sv(s,'dexterity_score')
-        con_   = sv(s,'constitution_score')
-        int_   = sv(s,'intelligence_score')
-        wis_   = sv(s,'wisdom_score')
-        cha_   = sv(s,'charisma_score')
+    files = sorted(glob.glob(str(DATA_DIR / 'monster_*.json')))
+    rows = []
+    sources, crs = set(), set()
 
-        # speed string
-        spd_parts = []
-        if spd: spd_parts.append(f"{spd} ft.")
-        if fly: spd_parts.append(f"fly {fly}")
-        if swim: spd_parts.append(f"swim {swim}")
-        if bur: spd_parts.append(f"burrow {bur}")
-        if cli: spd_parts.append(f"climb {cli}")
-        spd_str = ', '.join(spd_parts) if spd_parts else '0 ft.'
+    for fp in files:
+        d = load_json(fp)
+        if not d: continue
+        s = d.get('stats', {})
+        name = gv(s, 'name') or ''
+        if not name: continue
+        source = gv(s, 'source') or ''
+        cr     = gv(s, 'cr') or ''
+        mtype  = gv(s, 'type') or ''
+        tag    = gv(s, 'tag') or ''
+        ac     = gv(s, 'armor_class') or 0
+        xp     = gv(s, 'xp') or 0
 
-        type_tag = mtype + (f' ({tag})' if tag else '')
+        # HP dice notation
+        hp_obj = (s.get('hit_points') or {}).get('value', {})
+        hp = ''
+        if isinstance(hp_obj, dict):
+            hs  = hp_obj.get('stats', {})
+            amt = ((hs.get('dice_amount') or {}).get('value') or 0)
+            dt  = ((hs.get('dice_type')   or {}).get('value') or '')
+            con = ((hs.get('constant')    or {}).get('value') or 0)
+            if amt and dt:
+                hp = f"{amt}{dt}" + (f"+{con}" if con else "")
+
+        # Speed
+        spd   = int(gv(s, 'speed')        or 0)
+        fly   = int(gv(s, 'fly_speed')    or 0)
+        swim  = int(gv(s, 'swim_speed')   or 0)
+        climb = int(gv(s, 'climb_speed')  or 0)
+        sp_parts = [f"{spd} ft"]
+        if fly:   sp_parts.append(f"fly {fly}")
+        if swim:  sp_parts.append(f"swim {swim}")
+        if climb: sp_parts.append(f"climb {climb}")
+        speed = ', '.join(sp_parts)
+
+        STR = int(gv(s, 'strength_score')     or 10)
+        DEX = int(gv(s, 'dexterity_score')    or 10)
+        CON = int(gv(s, 'constitution_score') or 10)
+        INT = int(gv(s, 'intelligence_score') or 10)
+        WIS = int(gv(s, 'wisdom_score')       or 10)
+        CHA = int(gv(s, 'charisma_score')     or 10)
+
         sources.add(source)
-        if cr_raw: cr_vals.add(cr_raw)
-        if mtype: types.add(mtype)
-
-        data.append({
-            'n': name, 'src': source, 'cr': cr_fmt, 'crn': cr_n,
-            't': type_tag, 'mt': mtype,
-            'ac': ac, 'hp': hp, 'spd': spd_str, 'xp': xp,
-            'str': str_, 'dex': dex_, 'con': con_,
-            'int': int_, 'wis': wis_, 'cha': cha_,
+        crs.add(cr)
+        rows.append({
+            'n': name, 'src': source, 'cr': cr, 'crn': cr_num(cr), 'crd': cr_disp(cr),
+            'tp': mtype, 'tag': tag, 'ac': int(ac), 'hp': hp, 'sp': speed,
+            'xp': int(xp),
+            'S': STR, 'D': DEX, 'C': CON, 'I': INT, 'W': WIS, 'H': CHA,
+            'sm': abmod(STR), 'dm': abmod(DEX), 'cm': abmod(CON),
+            'im': abmod(INT), 'wm': abmod(WIS), 'hm': abmod(CHA),
         })
 
-    # Sort CR options numerically
-    cr_sorted = sorted(cr_vals, key=cr_num)
-    cr_options = '\n'.join(
-        f'<option value="{esc(c)}">{esc(fmt_cr(c))}</option>'
-        for c in cr_sorted
+    cr_sorted = sorted({r['cr'] for r in rows if r['cr']}, key=lambda x: cr_num(x))
+    src_sorted = sorted(sources)
+
+    cr_opts  = ''.join(f'<option value="{c}">{cr_disp(c)}</option>' for c in cr_sorted)
+    src_opts = ''.join(f'<option value="{s}">{s.upper()}</option>' for s in src_sorted)
+
+    filters = (
+        f'<input type="text" id="qs" placeholder="Search name, type, tag\u2026" oninput="fil()">'
+        f'<label>CR<select id="fcr" onchange="fil()"><option value="">All CR</option>{cr_opts}</select></label>'
+        f'<label>Source<select id="fsr" onchange="fil()"><option value="">All Sources</option>{src_opts}</select></label>'
     )
-    src_options = '\n'.join(f'<option value="{esc(s)}">{esc(s)}</option>' for s in sorted(sources))
-    type_options = '\n'.join(f'<option value="{esc(t)}">{esc(t.title())}</option>' for t in sorted(types))
 
-    data_json = json.dumps(data, ensure_ascii=False)
+    data_js = json.dumps(rows, ensure_ascii=False)
 
-    html = page_head('Monsters — 5e', '🐉', f'{len(data):,} monsters')
-    html += f'''
-<div class="filters">
-  <input type="text" id="fsearch" placeholder="Search name or type…" oninput="applyFilters()">
-  <select id="fcr" onchange="applyFilters()"><option value="">All CRs</option>{cr_options}</select>
-  <select id="ftype" onchange="applyFilters()"><option value="">All Types</option>{type_options}</select>
-  <select id="fsrc" onchange="applyFilters()"><option value="">All Sources</option>{src_options}</select>
-  <span class="count" id="cnt"></span>
-</div>
-<div class="pager" id="pager"></div>
-<div class="table-wrap">
-<table><thead><tr>
-  <th onclick="sortBy(0)">Name</th>
-  <th onclick="sortBy(1)">CR</th>
-  <th onclick="sortBy(2)">Type</th>
-  <th onclick="sortBy(3)">AC</th>
-  <th onclick="sortBy(4)">HP</th>
-  <th onclick="sortBy(5)">Speed</th>
-  <th onclick="sortBy(6)">XP</th>
-  <th onclick="sortBy(7)">Source</th>
-</tr></thead><tbody id="tbody"></tbody></table>
-</div>
-<script>
-var ALL={data_json};
-var _sc=-1,_sa=true,_page=0,_PER=75,_filtered=[];
-var _COLS=['n','crn','t','ac','hp','spd','xp','src'];
-function sortBy(col){{
-  document.querySelectorAll('thead th').forEach(function(t){{t.classList.remove('asc','desc');}});
-  if(_sc===col){{_sa=!_sa;}}else{{_sc=col;_sa=true;}}
-  document.querySelectorAll('thead th')[col].classList.add(_sa?'asc':'desc');
-  _page=0; render();
-}}
-function applyFilters(){{
-  var q=(document.getElementById('fsearch').value||'').toLowerCase();
-  var fcr=document.getElementById('fcr').value;
-  var ft=document.getElementById('ftype').value;
-  var fs=document.getElementById('fsrc').value;
-  _filtered=ALL.filter(function(m){{
-    if(q && m.n.toLowerCase().indexOf(q)<0 && m.t.toLowerCase().indexOf(q)<0) return false;
-    if(fcr && m.cr!==fcr) return false;
-    if(ft && m.mt!==ft) return false;
-    if(fs && m.src!==fs) return false;
-    return true;
-  }});
-  if(_sc>=0){{
-    var col=_COLS[_sc];
-    _filtered.sort(function(a,b){{
-      var av=a[col]||'',bv=b[col]||'';
-      if(typeof av==='number'&&typeof bv==='number') return _sa?av-bv:bv-av;
-      av=String(av).toLowerCase(); bv=String(bv).toLowerCase();
-      return _sa?(av<bv?-1:av>bv?1:0):(bv<av?-1:bv>av?1:0);
-    }});
-  }}
-  _page=0; render();
-}}
-function esc(s){{return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}}
-function ab(score,label){{
-  if(score==null) return '<div class="ab-cell"><div class="ab-label">'+label+'</div><div class="ab-val">—</div><div class="ab-mod"></div></div>';
-  var m=Math.floor((score-10)/2); var ms=m>=0?'+'+m:String(m);
-  return '<div class="ab-cell"><div class="ab-label">'+label+'</div><div class="ab-val">'+score+'</div><div class="ab-mod">'+ms+'</div></div>';
-}}
+    js = f"""const DATA={data_js};
+let F=DATA.slice(),open=-1,pg=0;
+const PS=100;
+const SK=[r=>r.n,r=>r.crn,r=>r.tp,r=>r.ac,r=>r.hp,r=>r.sp,r=>r.xp,r=>r.src];
+{JS_SORT}
 function render(){{
-  var start=_page*_PER, end=Math.min(start+_PER,_filtered.length);
-  var html='';
-  for(var i=start;i<end;i++){{
-    var m=_filtered[i];
-    var id='m'+i;
-    html+='<tr onclick="toggle(this,\\''+id+'\\')"><td><strong>'+esc(m.n)+'</strong></td>';
-    html+='<td>'+esc(m.cr)+'</td><td>'+esc(m.t)+'</td>';
-    html+='<td>'+esc(m.ac||'—')+'</td><td>'+esc(m.hp)+'</td>';
-    html+='<td style="white-space:nowrap;font-size:12px">'+esc(m.spd)+'</td>';
-    html+='<td>'+(m.xp?m.xp.toLocaleString():'—')+'</td>';
-    html+='<td style="color:#888;font-size:12px">'+esc(m.src)+'</td></tr>';
-    html+='<tr class="desc-row" id="dr'+id+'" style="display:none"><td colspan="8">';
-    html+='<div class="desc-content"><div class="ab-grid">';
-    html+=ab(m.str,'STR')+ab(m.dex,'DEX')+ab(m.con,'CON');
-    html+=ab(m.int,'INT')+ab(m.wis,'WIS')+ab(m.cha,'CHA');
-    html+='</div></div></td></tr>';
-  }}
-  document.getElementById('tbody').innerHTML=html;
-  document.getElementById('cnt').textContent=_filtered.length.toLocaleString()+' of '+ALL.length.toLocaleString()+' monsters';
-  renderPager(end-start);
+  const sl=F.slice(pg*PS,(pg+1)*PS);
+  const h=[];
+  sl.forEach((r,i)=>{{
+    const gi=pg*PS+i;
+    const tg=r.tag&&r.tag!==r.tp?`<span class="tag">${{esc(r.tag)}}</span>`:'';
+    h.push(`<tr onclick="tog(${{gi}})"${{open===gi?' class="active"':''}}>`+
+      `<td>${{esc(r.n)}}</td><td>${{esc(r.crd||'\u2014')}}</td>`+
+      `<td>${{esc(r.tp)}}${{tg}}</td><td>${{r.ac||'\u2014'}}</td>`+
+      `<td>${{esc(r.hp||'\u2014')}}</td><td>${{esc(r.sp)}}</td>`+
+      `<td>${{r.xp||'\u2014'}}</td><td>${{esc(r.src).toUpperCase()}}</td></tr>`);
+    h.push(`<tr class="desc-row" style="display:${{open===gi?'':'none'}}"><td colspan="8">`+
+      `<div class="desc-content">`+
+      `STR ${{r.S}} (${{r.sm}})\u2003DEX ${{r.D}} (${{r.dm}})\u2003CON ${{r.C}} (${{r.cm}})`+
+      `\u2003INT ${{r.I}} (${{r.im}})\u2003WIS ${{r.W}} (${{r.wm}})\u2003CHA ${{r.H}} (${{r.hm}})`+
+      `</div></td></tr>`);
+  }});
+  document.getElementById('tb').innerHTML=h.join('');
+  document.getElementById('cnt').textContent=F.length+'/'+DATA.length;
+  const tot=Math.ceil(F.length/PS),pb=[];
+  for(let i=0;i<tot;i++)pb.push(`<button class="${{pg===i?'act':''}}" onclick="gp(${{i}})">${{i+1}}</button>`);
+  document.getElementById('pgn').innerHTML=pb.join('');
 }}
-function toggle(tr, id){{
-  var dr=document.getElementById('dr'+id);
-  var was=tr.classList.contains('active');
-  document.querySelectorAll('tbody tr.active').forEach(function(r){{r.classList.remove('active');}});
-  document.querySelectorAll('.desc-row').forEach(function(r){{r.style.display='none';}});
-  if(!was){{tr.classList.add('active');dr.style.display='';}}
+function gp(p){{pg=p;open=-1;render();}}
+function tog(i){{open=open===i?-1:i;render();}}
+function fil(){{
+  const q=document.getElementById('qs').value.toLowerCase();
+  const fc=document.getElementById('fcr').value;
+  const fs=document.getElementById('fsr').value;
+  F=DATA.filter(r=>
+    (!q||(r.n+' '+r.tp+' '+r.tag).toLowerCase().includes(q))&&
+    (!fc||r.cr===fc)&&(!fs||r.src===fs));
+  pg=0;open=-1;render();
 }}
-function renderPager(){{
-  var pages=Math.ceil(_filtered.length/_PER);
-  if(pages<=1){{document.getElementById('pager').innerHTML='';return;}}
-  var h='<span class="pi">Page:</span> ';
-  var start=Math.max(0,_page-4), end=Math.min(pages,_page+5);
-  if(start>0) h+='<button onclick="goPage(0)">1</button><span class="pi">…</span> ';
-  for(var p=start;p<end;p++){{
-    h+='<button class="'+(p===_page?'on':'')+'" onclick="goPage('+p+')">'+(p+1)+'</button> ';
-  }}
-  if(end<pages) h+='<span class="pi">…</span><button onclick="goPage('+(pages-1)+')">'+pages+'</button>';
-  document.getElementById('pager').innerHTML=h;
-}}
-function goPage(p){{_page=p;render();window.scrollTo(0,0);}}
-applyFilters();
-</script>
-'''.replace('{data_json}', data_json)
+render();"""
 
-    (OUT / 'monsters.html').write_text(html, encoding='utf-8')
-    print(f"  monsters.html — {len(data):,} monsters, {len(html)//1024} KB")
+    return page(
+        'Monsters \u2014 5e Reference', '\U0001f479',
+        filters,
+        th(['Name','CR','Type','AC','HP','Speed','XP','Source']),
+        js, '<div class="pgn" id="pgn"></div>'
+    )
 
-
-# ─── 2. WEAPONS ───────────────────────────────────────────────────────────────
+# ─── 2. weapons ────────────────────────────────────────────────────────────
 
 def build_weapons():
-    print("Building weapons.html...")
-    rows = load_all('weapon_*.rpg.json')
+    files = sorted(glob.glob(str(DATA_DIR / 'weapon_*.rpg.json')))
+    rows = []
     sources = set()
-    cats = set()
-    wtypes = set()
 
-    def get_damage(s):
-        dd = sv(s,'damage_dice')
-        if isinstance(dd, list) and dd:
-            try:
-                dice = dd[0]['stats']['dices']['value']
-                if dice:
-                    da = dice[0]['stats']['dice_amount']['value']
-                    dt = dice[0]['stats']['dice_type']['value']
-                    dtype = dd[0]['stats'].get('type', {})
-                    if isinstance(dtype, dict): dtype = dtype.get('value', '')
-                    return f"{da}{dt}", str(dtype) if dtype else '—'
-            except: pass
-        return '—', '—'
+    for fp in files:
+        d = load_json(fp)
+        if not d: continue
+        s = d.get('stats', {})
+        name = gv(s, 'name') or ''
+        if not name: continue
+        source    = gv(s, 'source') or ''
+        wtype     = gv(s, 'type') or ''
+        is_simple = gv(s, 'is_simple')
+        cat = 'Simple' if is_simple else 'Martial'
 
-    def get_props(s):
+        # Damage
+        dmg_arr = (s.get('damage_dice') or {}).get('value', [])
+        dmg, dmg_type = '', ''
+        if dmg_arr and isinstance(dmg_arr, list):
+            dd = dmg_arr[0] if dmg_arr else {}
+            ds = dd.get('stats', {}) if isinstance(dd, dict) else {}
+            dices = (ds.get('dices') or {}).get('value', [])
+            if dices and isinstance(dices, list):
+                d0 = dices[0] if dices else {}
+                d0s = d0.get('stats', {}) if isinstance(d0, dict) else {}
+                amt = ((d0s.get('dice_amount') or {}).get('value') or 0)
+                dt  = ((d0s.get('dice_type')   or {}).get('value') or '')
+                if amt and dt:
+                    dmg = f"{amt}{dt}"
+            dmg_type = ((ds.get('damage_type') or {}).get('value') or '')
+
+        # Versatile damage
+        vers_arr = (s.get('versatile_damage_dice') or {}).get('value', [])
+        vers_dmg = ''
+        if vers_arr and isinstance(vers_arr, list):
+            vd = vers_arr[0] if vers_arr else {}
+            vds = vd.get('stats', {}) if isinstance(vd, dict) else {}
+            vdices = (vds.get('dices') or {}).get('value', [])
+            if vdices:
+                v0 = vdices[0] if vdices else {}
+                v0s = v0.get('stats', {}) if isinstance(v0, dict) else {}
+                vamt = ((v0s.get('dice_amount') or {}).get('value') or 0)
+                vdt  = ((v0s.get('dice_type')   or {}).get('value') or '')
+                if vamt and vdt:
+                    vers_dmg = f"{vamt}{vdt}"
+
+        # Properties
         props = []
-        if sv(s,'is_finesse'): props.append('Finesse')
-        if sv(s,'is_reach'): props.append('Reach')
-        if sv(s,'is_two_handed'): props.append('Two-handed')
-        if sv(s,'is_versatile'): props.append('Versatile')
-        if sv(s,'is_thrown'):
-            tr_ = sv(s,'thrown_range')
-            props.append(f"Thrown ({tr_})" if tr_ else 'Thrown')
-        if sv(s,'is_light'): props.append('Light')
-        if sv(s,'is_heavy'): props.append('Heavy')
-        if sv(s,'is_loading'): props.append('Loading')
-        if sv(s,'is_range'): props.append('Ranged')
-        return ', '.join(props) if props else '—'
+        if gv(s, 'is_finesse'):    props.append('Finesse')
+        if gv(s, 'is_thrown'):     props.append('Thrown')
+        if gv(s, 'is_light'):      props.append('Light')
+        if gv(s, 'is_versatile'):
+            props.append(f'Versatile ({vers_dmg})' if vers_dmg else 'Versatile')
+        if gv(s, 'is_reach'):      props.append('Reach')
+        if gv(s, 'is_two_handed'): props.append('Two-Handed')
+        if gv(s, 'is_heavy'):      props.append('Heavy')
+        if gv(s, 'is_loading'):    props.append('Loading')
+        if gv(s, 'is_ammunition') or gv(s, 'is_ranged'):
+            props.append('Ammunition')
 
-    tbody = ''
-    all_rows = []
-    for d in rows:
-        s = d['stats']
-        name   = sv(s,'name') or ''
-        source = (sv(s,'source') or 'SRD').upper()
-        is_sim = sv(s,'is_simple')
-        cat    = 'Simple' if is_sim else 'Martial'
-        wtype  = (sv(s,'type') or '').replace('_',' ').title()
-        dmg, dmg_type = get_damage(s)
-        props  = get_props(s)
-        cost   = get_cost(s)
-        weight = get_weight(s)
         sources.add(source)
-        cats.add(cat)
-        if wtype: wtypes.add(wtype)
-        all_rows.append((name, cat, wtype, dmg, dmg_type, props, cost, weight, source))
+        rows.append({
+            'n': name, 'src': source, 'tp': wtype, 'cat': cat,
+            'dmg': dmg, 'dtp': dmg_type,
+            'props': ', '.join(props) if props else '\u2014',
+            'cost': cost_str(s), 'wt': weight_str(s),
+        })
 
-    # Build sortable rows
-    for (name, cat, wtype, dmg, dmg_type, props, cost, weight, source) in sorted(all_rows, key=lambda x: x[0].lower()):
-        dc = f'data-name="{esc(name.lower())}" data-cat="{esc(cat)}" data-type="{esc(wtype)}" data-src="{esc(source)}"'
-        tbody += f'<tr {dc} onclick="toggleRow(this)"><td><strong>{esc(name)}</strong></td>'
-        tbody += f'<td>{esc(cat)}</td><td style="font-size:12px">{esc(wtype)}</td>'
-        tbody += f'<td>{esc(dmg)}</td><td>{esc(dmg_type)}</td>'
-        tbody += f'<td style="font-size:12px">{esc(props)}</td>'
-        tbody += f'<td style="font-size:12px">{esc(cost)}</td>'
-        tbody += f'<td style="font-size:12px">{esc(weight)}</td>'
-        tbody += f'<td style="color:#888;font-size:12px">{esc(source)}</td></tr>'
-        tbody += f'<tr class="desc-row"><td colspan="9"></td></tr>'
+    src_opts = ''.join(f'<option value="{s}">{s.upper()}</option>' for s in sorted(sources))
+    filters = (
+        f'<input type="text" id="qs" placeholder="Search weapons\u2026" oninput="fil()">'
+        f'<label>Category<select id="fcat" onchange="fil()"><option value="">All</option>'
+        f'<option value="Simple">Simple</option><option value="Martial">Martial</option></select></label>'
+        f'<label>Source<select id="fsr" onchange="fil()"><option value="">All Sources</option>{src_opts}</select></label>'
+    )
 
-    cat_opts = '\n'.join(f'<option value="{esc(c)}">{esc(c)}</option>' for c in sorted(cats))
-    type_opts = '\n'.join(f'<option value="{esc(t)}">{esc(t)}</option>' for t in sorted(wtypes))
-    src_opts  = '\n'.join(f'<option value="{esc(s)}">{esc(s)}</option>' for s in sorted(sources))
-
-    html = page_head('Weapons — 5e', '⚔️', f'{len(all_rows)} weapons')
-    html += f'''
-<div class="filters">
-  <input type="text" id="fsearch" placeholder="Search name…" oninput="applyFilters()">
-  <select id="fcat" onchange="applyFilters()"><option value="">All Categories</option>{cat_opts}</select>
-  <select id="ftype" onchange="applyFilters()"><option value="">All Types</option>{type_opts}</select>
-  <select id="fsrc" onchange="applyFilters()"><option value="">All Sources</option>{src_opts}</select>
-  <span class="count" id="cnt"></span>
-</div>
-<div class="table-wrap">
-<table><thead><tr>
-  <th onclick="sortBy(0)">Name</th>
-  <th onclick="sortBy(1)">Category</th>
-  <th onclick="sortBy(2)">Type</th>
-  <th onclick="sortBy(3)">Damage</th>
-  <th onclick="sortBy(4)">Dmg Type</th>
-  <th onclick="sortBy(5)">Properties</th>
-  <th onclick="sortBy(6)">Cost</th>
-  <th onclick="sortBy(7)">Weight</th>
-  <th onclick="sortBy(8)">Source</th>
-</tr></thead><tbody id="tbody">{tbody}</tbody></table>
-</div>
-<script>
-{SORT_JS}
-function applyFilters(){{
-  var q=(document.getElementById('fsearch').value||'').toLowerCase();
-  var fcat=document.getElementById('fcat').value;
-  var ft=document.getElementById('ftype').value;
-  var fs=document.getElementById('fsrc').value;
-  var rows=document.querySelectorAll('#tbody tr:not(.desc-row)');
-  var vis=0;
-  rows.forEach(function(tr){{
-    var nm=tr.getAttribute('data-name')||'';
-    var cat=tr.getAttribute('data-cat')||'';
-    var wt=tr.getAttribute('data-type')||'';
-    var src=tr.getAttribute('data-src')||'';
-    var show=(!q||nm.indexOf(q)>=0)&&(!fcat||cat===fcat)&&(!ft||wt===ft)&&(!fs||src===fs);
-    tr.style.display=show?'':'none';
-    var next=tr.nextElementSibling;
-    if(next&&next.classList.contains('desc-row'))next.style.display='none';
-    if(show)vis++;
+    data_js = json.dumps(rows, ensure_ascii=False)
+    js = f"""const DATA={data_js};
+let F=DATA.slice(),open=-1;
+const SK=[r=>r.n,r=>r.cat,r=>r.dmg,r=>r.dtp,r=>r.props,r=>r.cost,r=>r.wt,r=>r.src];
+{JS_SORT}
+function render(){{
+  const h=[];
+  F.forEach((r,i)=>{{
+    h.push(`<tr onclick="tog(${{i}})"${{open===i?' class="active"':''}}>`+
+      `<td>${{esc(r.n)}}</td><td>${{esc(r.cat)}}</td>`+
+      `<td>${{esc(r.dmg||'\u2014')}}</td><td>${{esc(r.dtp||'\u2014')}}</td>`+
+      `<td style="font-size:12px">${{esc(r.props)}}</td>`+
+      `<td>${{esc(r.cost||'\u2014')}}</td><td>${{esc(r.wt||'\u2014')}}</td>`+
+      `<td>${{esc(r.src).toUpperCase()}}</td></tr>`);
+    h.push(`<tr class="desc-row" style="display:${{open===i?'':'none'}}"><td colspan="8">`+
+      `<div class="desc-content">`+
+      `Type: ${{esc(r.tp||'\u2014')}}\u2003Category: ${{esc(r.cat)}}\u2003Properties: ${{esc(r.props)}}`+
+      `</div></td></tr>`);
   }});
-  if(_sc>=0) sortRows();
-  document.getElementById('cnt').textContent=vis+' weapons';
+  document.getElementById('tb').innerHTML=h.join('');
+  document.getElementById('cnt').textContent=F.length+'/'+DATA.length;
 }}
-function sortRows(){{
-  var tbody=document.getElementById('tbody');
-  var mainRows=[...tbody.querySelectorAll('tr:not(.desc-row)')].filter(r=>r.style.display!=='none');
-  mainRows.sort(function(a,b){{
-    var av=a.querySelectorAll('td')[_sc]?.textContent||'';
-    var bv=b.querySelectorAll('td')[_sc]?.textContent||'';
-    return _sa?(av<bv?-1:av>bv?1:0):(bv<av?-1:bv>av?1:0);
-  }});
-  mainRows.forEach(function(tr){{
-    var next=tr.nextElementSibling;
-    tbody.appendChild(tr);
-    if(next&&next.classList.contains('desc-row'))tbody.appendChild(next);
-  }});
+function tog(i){{open=open===i?-1:i;render();}}
+function fil(){{
+  const q=document.getElementById('qs').value.toLowerCase();
+  const fc=document.getElementById('fcat').value;
+  const fs=document.getElementById('fsr').value;
+  F=DATA.filter(r=>
+    (!q||(r.n+' '+r.tp+' '+r.props).toLowerCase().includes(q))&&
+    (!fc||r.cat===fc)&&(!fs||r.src===fs));
+  open=-1;render();
 }}
-applyFilters();
-</script>
-'''
-    (OUT / 'weapons.html').write_text(html, encoding='utf-8')
-    print(f"  weapons.html — {len(all_rows)} weapons, {len(html)//1024} KB")
+render();"""
 
+    return page(
+        'Weapons \u2014 5e Reference', '\u2694\ufe0f',
+        filters,
+        th(['Name','Category','Damage','Dmg Type','Properties','Cost','Weight','Source']),
+        js
+    )
 
-# ─── 3. ARMOR ─────────────────────────────────────────────────────────────────
+# ─── 3. armor ──────────────────────────────────────────────────────────────
 
 def build_armor():
-    print("Building armor.html...")
-    rows = load_all('armor_*.rpg.json')
-    sources = set()
-    types_ = set()
-    all_rows = []
-    for d in rows:
-        s = d['stats']
-        name    = sv(s,'name') or ''
-        source  = (sv(s,'source') or 'SRD').upper()
-        atype   = (sv(s,'type') or '').title()
-        base_ac = sv(s,'base_ac') or '—'
-        req_str = sv(s,'required_strength') or '—'
-        stealth = sv(s,'impose_stealth_disadvantage')
-        stealth_str = '✓' if stealth else '—'
-        cost    = get_cost(s)
-        weight  = get_weight(s)
+    files = sorted(glob.glob(str(DATA_DIR / 'armor_*.rpg.json')))
+    rows = []
+    sources, types = set(), set()
+
+    for fp in files:
+        d = load_json(fp)
+        if not d: continue
+        s = d.get('stats', {})
+        name = gv(s, 'name') or ''
+        if not name: continue
+        source  = gv(s, 'source') or ''
+        atype   = gv(s, 'type') or ''
+        base_ac = gv(s, 'base_ac') or 0
+        req_str = gv(s, 'required_strength') or 0
+        stealth = gv(s, 'impose_stealth_disadvantage') or False
+        is_magic = gv(s, 'is_magic') or False
+
         sources.add(source)
-        if atype: types_.add(atype)
-        all_rows.append((name, atype, base_ac, req_str, stealth_str, cost, weight, source))
+        types.add(atype)
+        rows.append({
+            'n': name, 'src': source, 'tp': atype, 'tpd': atype.title(),
+            'ac': int(base_ac), 'str': int(req_str) if req_str else 0,
+            'stl': bool(stealth), 'mag': bool(is_magic),
+            'cost': cost_str(s), 'wt': weight_str(s),
+        })
 
-    tbody = ''
-    for (name, atype, base_ac, req_str, stealth_str, cost, weight, source) in sorted(all_rows, key=lambda x: x[0].lower()):
-        dc = f'data-name="{esc(name.lower())}" data-type="{esc(atype)}" data-src="{esc(source)}"'
-        tbody += f'<tr {dc}><td><strong>{esc(name)}</strong></td>'
-        tbody += f'<td>{esc(atype)}</td><td>{esc(str(base_ac))}</td>'
-        tbody += f'<td>{esc(str(req_str))}</td>'
-        tbody += (f'<td style="color:#f87171">{esc(stealth_str)}</td>'
-                  if stealth_str=='✓' else f'<td>{nd("—")}</td>')
-        tbody += f'<td style="font-size:12px">{esc(cost)}</td>'
-        tbody += f'<td style="font-size:12px">{esc(weight)}</td>'
-        tbody += f'<td style="color:#888;font-size:12px">{esc(source)}</td></tr>'
+    src_opts  = ''.join(f'<option value="{s}">{s.upper()}</option>' for s in sorted(sources))
+    type_opts = ''.join(f'<option value="{t}">{t.title()}</option>' for t in sorted(types) if t)
+    filters = (
+        f'<input type="text" id="qs" placeholder="Search armor\u2026" oninput="fil()">'
+        f'<label>Type<select id="ftp" onchange="fil()"><option value="">All Types</option>{type_opts}</select></label>'
+        f'<label>Source<select id="fsr" onchange="fil()"><option value="">All Sources</option>{src_opts}</select></label>'
+    )
 
-    type_opts = '\n'.join(f'<option value="{esc(t)}">{esc(t)}</option>' for t in sorted(types_))
-    src_opts  = '\n'.join(f'<option value="{esc(s)}">{esc(s)}</option>' for s in sorted(sources))
-
-    html = page_head('Armor — 5e', '🛡️', f'{len(all_rows)} armor pieces')
-    html += f'''
-<div class="filters">
-  <input type="text" id="fsearch" placeholder="Search name…" oninput="applyFilters()">
-  <select id="ftype" onchange="applyFilters()"><option value="">All Types</option>{type_opts}</select>
-  <select id="fsrc" onchange="applyFilters()"><option value="">All Sources</option>{src_opts}</select>
-  <span class="count" id="cnt"></span>
-</div>
-<div class="table-wrap">
-<table><thead><tr>
-  <th onclick="sortBy(0)">Name</th>
-  <th onclick="sortBy(1)">Type</th>
-  <th onclick="sortBy(2)">Base AC</th>
-  <th onclick="sortBy(3)">Req STR</th>
-  <th onclick="sortBy(4)">Stealth Disadv</th>
-  <th onclick="sortBy(5)">Cost</th>
-  <th onclick="sortBy(6)">Weight</th>
-  <th onclick="sortBy(7)">Source</th>
-</tr></thead><tbody id="tbody">{tbody}</tbody></table>
-</div>
-<script>
-{SORT_JS}
-function applyFilters(){{
-  var q=(document.getElementById('fsearch').value||'').toLowerCase();
-  var ft=document.getElementById('ftype').value;
-  var fs=document.getElementById('fsrc').value;
-  var rows=document.querySelectorAll('#tbody tr');
-  var vis=0;
-  rows.forEach(function(tr){{
-    var nm=tr.getAttribute('data-name')||'';
-    var t=tr.getAttribute('data-type')||'';
-    var s=tr.getAttribute('data-src')||'';
-    var show=(!q||nm.indexOf(q)>=0)&&(!ft||t===ft)&&(!fs||s===fs);
-    tr.style.display=show?'':'none';
-    if(show)vis++;
+    data_js = json.dumps(rows, ensure_ascii=False)
+    js = f"""const DATA={data_js};
+let F=DATA.slice(),open=-1;
+const SK=[r=>r.n,r=>r.tpd,r=>r.ac,r=>r.str,r=>r.stl?1:0,r=>r.cost,r=>r.wt,r=>r.src];
+{JS_SORT}
+function ck(v){{return v?'<span class="ck">\u2713</span>':'<span class="cx">\u2014</span>';}}
+function render(){{
+  const h=[];
+  F.forEach((r,i)=>{{
+    h.push(`<tr onclick="tog(${{i}})"${{open===i?' class="active"':''}}>`+
+      `<td>${{esc(r.n)}}${{r.mag?' <span class="tag">magic</span>':''}}</td>`+
+      `<td>${{esc(r.tpd)}}</td><td>${{r.ac||'\u2014'}}</td>`+
+      `<td>${{r.str||'\u2014'}}</td><td>${{ck(r.stl)}}</td>`+
+      `<td>${{esc(r.cost||'\u2014')}}</td><td>${{esc(r.wt||'\u2014')}}</td>`+
+      `<td>${{esc(r.src).toUpperCase()}}</td></tr>`);
+    h.push(`<tr class="desc-row" style="display:${{open===i?'':'none'}}"><td colspan="8">`+
+      `<div class="desc-content">`+
+      `Type: ${{esc(r.tpd)}}\u2003Base AC: ${{r.ac}}`+
+      `${{r.str?' \u2003Req STR: '+r.str:''}}`+
+      `${{r.stl?' \u2003\u26a0\ufe0f Stealth Disadvantage':''}}`+
+      `${{r.mag?' \u2003\u2728 Magic item':''}}`+
+      `</div></td></tr>`);
   }});
-  document.getElementById('cnt').textContent=vis+' items';
+  document.getElementById('tb').innerHTML=h.join('');
+  document.getElementById('cnt').textContent=F.length+'/'+DATA.length;
 }}
-applyFilters();
-</script>
-'''
-    (OUT / 'armor.html').write_text(html, encoding='utf-8')
-    print(f"  armor.html — {len(all_rows)} pieces, {len(html)//1024} KB")
+function tog(i){{open=open===i?-1:i;render();}}
+function fil(){{
+  const q=document.getElementById('qs').value.toLowerCase();
+  const ft=document.getElementById('ftp').value;
+  const fs=document.getElementById('fsr').value;
+  F=DATA.filter(r=>
+    (!q||r.n.toLowerCase().includes(q))&&
+    (!ft||r.tp===ft)&&(!fs||r.src===fs));
+  open=-1;render();
+}}
+render();"""
 
+    return page(
+        'Armor \u2014 5e Reference', '\U0001f6e1\ufe0f',
+        filters,
+        th(['Name','Type','Base AC','Req STR','Stealth Disadv','Cost','Weight','Source']),
+        js
+    )
 
-# ─── 4. ITEMS ─────────────────────────────────────────────────────────────────
+# ─── 4. items ──────────────────────────────────────────────────────────────
+
+RARITY_ORDER = ['none','common','uncommon','rare','very rare','legendary','artifact']
 
 def build_items():
-    print("Building items.html...")
-    rows = load_all('item_*.rpg.json')
-    sources = set()
-    rarities = set()
-    types_ = set()
-    all_rows = []
-    for d in rows:
-        s = d['stats']
-        name    = sv(s,'name') or ''
-        itype   = (sv(s,'type') or '').replace('_',' ').title()
-        rarity  = (sv(s,'rarity') or 'common').title()
-        is_magic = bool(sv(s,'is_magic'))
-        attune  = bool(sv(s,'requires_attunement'))
-        cursed  = bool(sv(s,'is_cursed'))
-        weight  = get_weight(s)
-        # Try direct weight value
-        if weight == '—':
-            wv = s.get('weight', {})
-            if isinstance(wv, dict):
-                weight = str(wv.get('value', '—')) if wv.get('value') not in (None, '') else '—'
-        desc    = sv(s,'description') or ''
-        source  = (sv(s,'source') or 'SRD').upper()
+    files = sorted(glob.glob(str(DATA_DIR / 'item_*.rpg.json')))
+    rows = []
+    sources, types, rarities = set(), set(), set()
+
+    for fp in files:
+        d = load_json(fp)
+        if not d: continue
+        s = d.get('stats', {})
+        name = gv(s, 'name') or ''
+        if not name: continue
+        source = gv(s, 'source') or ''
+        itype  = gv(s, 'type') or ''
+        rarity = gv(s, 'rarity') or ''
+        is_magic = gv(s, 'is_magic') or False
+        attune   = gv(s, 'requires_attunement') or False
+        cursed   = gv(s, 'is_cursed') or False
+        desc     = gv(s, 'description') or ''
+
         sources.add(source)
-        if rarity: rarities.add(rarity)
-        if itype:  types_.add(itype)
-        all_rows.append((name, itype, rarity, is_magic, attune, cursed, weight, desc, source))
+        types.add(itype)
+        rarities.add(rarity)
+        rar_n = RARITY_ORDER.index(rarity) if rarity in RARITY_ORDER else 99
+        rows.append({
+            'n': name, 'src': source, 'tp': itype,
+            'rar': rarity, 'rarn': rar_n,
+            'mag': bool(is_magic), 'att': bool(attune), 'cur': bool(cursed),
+            'wt': weight_str(s), 'desc': desc,
+        })
 
-    tbody = ''
-    for (name, itype, rarity, is_magic, attune, cursed, weight, desc, source) in sorted(all_rows, key=lambda x: x[0].lower()):
-        dc = (f'data-name="{esc(name.lower())}" data-rarity="{esc(rarity.lower())}"'
-              f' data-type="{esc(itype)}" data-src="{esc(source)}"'
-              f' data-magic="{str(is_magic).lower()}"')
-        tbody += f'<tr {dc} onclick="toggleRow(this)"><td><strong>{esc(name)}</strong></td>'
-        tbody += f'<td style="font-size:12px">{esc(itype) or nd("—")}</td>'
-        tbody += f'<td>{esc(rarity)}</td>'
-        tbody += f'<td>{"✓" if is_magic else nd("—")}</td>'
-        tbody += f'<td>{"✓" if attune else nd("—")}</td>'
-        tbody += f'<td>{"✓" if cursed else nd("—")}</td>'
-        tbody += f'<td style="font-size:12px">{esc(weight)}</td>'
-        tbody += f'<td style="color:#888;font-size:12px">{esc(source)}</td></tr>'
-        tbody += f'<tr class="desc-row"><td colspan="8"><div class="desc-content"><p>{esc(desc) if desc else nd("No description.")}</p></div></td></tr>'
+    src_opts  = ''.join(f'<option value="{s}">{s.upper()}</option>' for s in sorted(sources))
+    type_opts = ''.join(f'<option value="{t}">{t.title()}</option>' for t in sorted(types) if t)
+    rar_opts  = ''.join(f'<option value="{r}">{r.title()}</option>'
+                        for r in RARITY_ORDER if r in rarities)
+    filters = (
+        f'<input type="text" id="qs" placeholder="Search items\u2026" oninput="fil()">'
+        f'<label>Type<select id="ftp" onchange="fil()"><option value="">All Types</option>{type_opts}</select></label>'
+        f'<label>Rarity<select id="frar" onchange="fil()"><option value="">All Rarities</option>{rar_opts}</select></label>'
+        f'<label>Magic<select id="fmag" onchange="fil()"><option value="">Magic: All</option>'
+        f'<option value="1">Magic only</option><option value="0">Non-magic</option></select></label>'
+        f'<label>Source<select id="fsr" onchange="fil()"><option value="">All Sources</option>{src_opts}</select></label>'
+    )
 
-    rar_opts  = '\n'.join(f'<option value="{esc(r.lower())}">{esc(r)}</option>' for r in ['Common','Uncommon','Rare','Very Rare','Legendary'])
-    type_opts = '\n'.join(f'<option value="{esc(t)}">{esc(t)}</option>' for t in sorted(types_))
-    src_opts  = '\n'.join(f'<option value="{esc(s)}">{esc(s)}</option>' for s in sorted(sources))
-
-    html = page_head('Magic Items & Equipment — 5e', '💎', f'{len(all_rows)} items')
-    html += f'''
-<div class="filters">
-  <input type="text" id="fsearch" placeholder="Search name…" oninput="applyFilters()">
-  <select id="frarity" onchange="applyFilters()"><option value="">All Rarities</option>{rar_opts}</select>
-  <select id="ftype" onchange="applyFilters()"><option value="">All Types</option>{type_opts}</select>
-  <select id="fmagic" onchange="applyFilters()"><option value="">Magic: All</option><option value="true">Magic Only</option><option value="false">Non-magic Only</option></select>
-  <select id="fsrc" onchange="applyFilters()"><option value="">All Sources</option>{src_opts}</select>
-  <span class="count" id="cnt"></span>
-</div>
-<div class="table-wrap">
-<table><thead><tr>
-  <th onclick="sortBy(0)">Name</th>
-  <th onclick="sortBy(1)">Type</th>
-  <th onclick="sortBy(2)">Rarity</th>
-  <th onclick="sortBy(3)">Magic</th>
-  <th onclick="sortBy(4)">Attunement</th>
-  <th onclick="sortBy(5)">Cursed</th>
-  <th onclick="sortBy(6)">Weight</th>
-  <th onclick="sortBy(7)">Source</th>
-</tr></thead><tbody id="tbody">{tbody}</tbody></table>
-</div>
-<script>
-{SORT_JS}
-function applyFilters(){{
-  var q=(document.getElementById('fsearch').value||'').toLowerCase();
-  var fr=document.getElementById('frarity').value;
-  var ft=document.getElementById('ftype').value;
-  var fm=document.getElementById('fmagic').value;
-  var fs=document.getElementById('fsrc').value;
-  var rows=document.querySelectorAll('#tbody tr:not(.desc-row)');
-  var vis=0;
-  rows.forEach(function(tr){{
-    var nm=tr.getAttribute('data-name')||'';
-    var ra=tr.getAttribute('data-rarity')||'';
-    var ty=tr.getAttribute('data-type')||'';
-    var mg=tr.getAttribute('data-magic')||'';
-    var sr=tr.getAttribute('data-src')||'';
-    var show=(!q||nm.indexOf(q)>=0)&&(!fr||ra===fr)&&(!ft||ty===ft)&&(!fm||mg===fm)&&(!fs||sr===fs);
-    tr.style.display=show?'':'none';
-    var next=tr.nextElementSibling;
-    if(next&&next.classList.contains('desc-row'))next.style.display='none';
-    if(show)vis++;
+    data_js = json.dumps(rows, ensure_ascii=False)
+    js = f"""const DATA={data_js};
+let F=DATA.slice(),open=-1;
+const SK=[r=>r.n,r=>r.tp,r=>r.rarn,r=>r.mag?1:0,r=>r.att?1:0,r=>r.cur?1:0,r=>r.wt,r=>r.src];
+{JS_SORT}
+function ck(v){{return v?'<span class="ck">\u2713</span>':'<span class="cx">\u2014</span>';}}
+function render(){{
+  const h=[];
+  F.forEach((r,i)=>{{
+    h.push(`<tr onclick="tog(${{i}})"${{open===i?' class="active"':''}}>`+
+      `<td>${{esc(r.n)}}</td><td>${{esc(r.tp||'\u2014')}}</td>`+
+      `<td>${{esc(r.rar||'\u2014')}}</td>`+
+      `<td>${{ck(r.mag)}}</td><td>${{ck(r.att)}}</td><td>${{ck(r.cur)}}</td>`+
+      `<td>${{esc(r.wt||'\u2014')}}</td><td>${{esc(r.src).toUpperCase()}}</td></tr>`);
+    h.push(`<tr class="desc-row" style="display:${{open===i?'':'none'}}"><td colspan="8">`+
+      `<div class="desc-content">${{esc(r.desc||'No description available.')}}</div></td></tr>`);
   }});
-  document.getElementById('cnt').textContent=vis+' items';
+  document.getElementById('tb').innerHTML=h.join('');
+  document.getElementById('cnt').textContent=F.length+'/'+DATA.length;
 }}
-applyFilters();
-</script>
-'''
-    (OUT / 'items.html').write_text(html, encoding='utf-8')
-    print(f"  items.html — {len(all_rows)} items, {len(html)//1024} KB")
+function tog(i){{open=open===i?-1:i;render();}}
+function fil(){{
+  const q=document.getElementById('qs').value.toLowerCase();
+  const ft=document.getElementById('ftp').value;
+  const fr=document.getElementById('frar').value;
+  const fm=document.getElementById('fmag').value;
+  const fs=document.getElementById('fsr').value;
+  F=DATA.filter(r=>
+    (!q||(r.n+' '+r.tp+' '+r.rar).toLowerCase().includes(q))&&
+    (!ft||r.tp===ft)&&(!fr||r.rar===fr)&&
+    (fm===''||(fm==='1'?r.mag:!r.mag))&&
+    (!fs||r.src===fs));
+  open=-1;render();
+}}
+render();"""
 
+    return page(
+        'Items \u2014 5e Reference', '\U0001f4a0',
+        filters,
+        th(['Name','Type','Rarity','Magic','Attunement','Cursed','Weight','Source']),
+        js
+    )
 
-# ─── 5. CONDITIONS ────────────────────────────────────────────────────────────
+# ─── 5. conditions ─────────────────────────────────────────────────────────
 
-def parse_conditions_srd():
-    """Parse srd-conditions.md into list of (name, summary, full_text)."""
-    path = SRD / 'srd-conditions.md'
-    if not path.exists():
-        return []
-    text = path.read_text(encoding='utf-8')
-
-    NAMES = ['Blinded','Charmed','Deafened','Exhaustion','Frightened','Grappled',
-             'Incapacitated','Invisible','Paralyzed','Petrified','Poisoned',
-             'Prone','Restrained','Stunned','Unconscious']
-
-    conditions = []
-    # Split by condition name headers
-    for i, name in enumerate(NAMES):
-        # Find the section for this condition
-        start = text.find('\n' + name + '\n')
-        if start < 0:
-            start = text.find('\n' + name.lower() + '\n')
-        if start < 0:
-            conditions.append((name, f'See rulebook for {name} condition.', ''))
-            continue
-        # Find end (next condition name or end of relevant section)
-        end = len(text)
-        for other in NAMES:
-            if other == name: continue
-            pos = text.find('\n' + other + '\n', start + 1)
-            if pos > start and pos < end:
-                end = pos
-        block = text[start:end].strip()
-        lines = block.split('\n')
-        # First line is the condition name, rest is description
-        desc_lines = lines[1:] if lines[0].strip() == name else lines
-        desc = ' '.join(l.strip() for l in desc_lines if l.strip()).strip()
-        # Summary = first bullet point or first sentence
-        summary = ''
-        for l in desc_lines:
-            l = l.strip()
-            if l.startswith('•'):
-                summary = l.lstrip('•').strip()
-                break
-            elif l and not l.startswith('#'):
-                summary = l[:120]
-                break
-        conditions.append((name, summary, '\n'.join(desc_lines).strip()))
-    return conditions
+COND_NAMES = [
+    'Blinded','Charmed','Deafened','Exhaustion','Frightened',
+    'Grappled','Incapacitated','Invisible','Paralyzed','Petrified',
+    'Poisoned','Prone','Restrained','Stunned','Unconscious'
+]
 
 def build_conditions():
-    print("Building conditions.html...")
-    conditions = parse_conditions_srd()
-    if not conditions:
-        # Hardcode fallback
-        conditions = [
-            ('Blinded', "Can't see; auto-fails sight checks; attacks against have advantage.", ''),
-            ('Charmed', "Can't attack charmer; charmer has advantage on social checks.", ''),
-            ('Deafened', "Can't hear; auto-fails hearing checks.", ''),
-            ('Exhaustion', 'Measured in 6 levels; each level applies cumulative effects.', ''),
-            ('Frightened', 'Disadvantage on checks/attacks while source in sight; can\'t move closer.', ''),
-            ('Grappled', 'Speed becomes 0; ends if grappler is incapacitated.', ''),
-            ('Incapacitated', "Can't take actions or reactions.", ''),
-            ('Invisible', 'Unseen; advantage on attacks; disadvantage on attacks against.', ''),
-            ('Paralyzed', 'Incapacitated; auto-fails STR/DEX saves; attacks from adj have advantage and crit.', ''),
-            ('Petrified', 'Turned to stone; incapacitated; resistance to all damage.', ''),
-            ('Poisoned', 'Disadvantage on attack rolls and ability checks.', ''),
-            ('Prone', 'Movement costs double; melee attacks have advantage; ranged attacks have disadvantage.', ''),
-            ('Restrained', 'Speed 0; attack rolls have disadvantage; DEX saves have disadvantage.', ''),
-            ('Stunned', 'Incapacitated; auto-fails STR/DEX saves; attacks have advantage.', ''),
-            ('Unconscious', 'Incapacitated, drops prone; auto-fails STR/DEX saves; attacks crit within 5 ft.', ''),
-        ]
+    cond_file = SRD_DIR / 'srd-conditions.md'
+    rows = []
 
-    tbody = ''
-    for name, summary, full in conditions:
-        full_escaped = esc(full).replace('\n', '<br>') if full else esc(summary)
-        tbody += f'<tr onclick="toggleRow(this)"><td><strong>{esc(name)}</strong></td>'
-        tbody += f'<td style="font-size:13px;color:#bbb">{esc(summary[:120])}{"…" if len(summary)>120 else ""}</td></tr>'
-        tbody += f'<tr class="desc-row"><td colspan="2"><div class="desc-content"><p>{full_escaped}</p></div></td></tr>'
+    if cond_file.exists():
+        text = cond_file.read_text(encoding='utf-8')
+        # Build a map of name -> body text
+        # Strategy: split on condition name lines, collect until next known name or EOF
+        # We'll do a multi-pass: find each condition's section
+        for name in COND_NAMES:
+            # Match the condition name as a standalone line (with optional surrounding whitespace)
+            # then capture everything until the next condition name or end
+            others = '|'.join(COND_NAMES)
+            pat = rf'(?m)^{re.escape(name)}\s*\n(.*?)(?=\n(?:{others})\s*\n|\Z)'
+            m = re.search(pat, text, re.DOTALL | re.IGNORECASE)
+            body = ''
+            summary = ''
+            if m:
+                body = m.group(1).strip()
+                # First non-empty line as summary (strip bullet chars)
+                lines = [l.strip() for l in body.split('\n') if l.strip()]
+                if lines:
+                    summary = re.sub(r'^[•\-\*]\s*', '', lines[0])
+                    if len(summary) > 140:
+                        summary = summary[:137] + '...'
+            if not summary:
+                summary = 'See full description.'
+            rows.append({'n': name, 'sum': summary, 'desc': body})
+    else:
+        # Hardcode basic descriptions
+        hardcoded = {
+            'Blinded':        "Can't see; auto-fails sight checks; attacks against have advantage.",
+            'Charmed':        "Can't attack the charmer; charmer has advantage on social checks.",
+            'Deafened':       "Can't hear; auto-fails hearing checks.",
+            'Exhaustion':     "Cumulative penalties by level: disadvantage, halved speed, death at 6.",
+            'Frightened':     "Disadvantage on checks/attacks while source is visible; can't approach.",
+            'Grappled':       "Speed becomes 0; ends if grappler is incapacitated or target moved away.",
+            'Incapacitated':  "Can't take actions or reactions.",
+            'Invisible':      "Can't be seen; attacks against have disadvantage; own attacks have advantage.",
+            'Paralyzed':      "Incapacitated; can't move or speak; auto-fails STR/DEX saves; crit within 5 ft.",
+            'Petrified':      "Transformed to solid inanimate substance; incapacitated; resistance to all damage.",
+            'Poisoned':       "Disadvantage on attack rolls and ability checks.",
+            'Prone':          "Melee attacks against have advantage; own attacks have disadvantage; costs half move to stand.",
+            'Restrained':     "Speed 0; attacks against have advantage; own attacks have disadvantage; DEX save disadvantage.",
+            'Stunned':        "Incapacitated; can't move; auto-fails STR/DEX saves; attacks against have advantage.",
+            'Unconscious':    "Incapacitated; can't move/speak; unaware; drops items; falls prone; auto-fails STR/DEX saves; crits within 5 ft.",
+        }
+        for name in COND_NAMES:
+            rows.append({'n': name, 'sum': hardcoded.get(name,''), 'desc': hardcoded.get(name,'')})
 
-    html = page_head('Conditions — 5e', '⚠️', '15 standard conditions')
-    html += f'''
-<div class="filters">
-  <input type="text" id="fsearch" placeholder="Search conditions…" oninput="applyFilters()">
-  <span class="count" id="cnt"></span>
-</div>
-<div class="table-wrap">
-<table><thead><tr>
-  <th onclick="sortBy(0)">Condition</th>
-  <th onclick="sortBy(1)">Summary</th>
-</tr></thead><tbody id="tbody">{tbody}</tbody></table>
-</div>
-<script>
-{SORT_JS}
-function applyFilters(){{
-  var q=(document.getElementById('fsearch').value||'').toLowerCase();
-  var rows=document.querySelectorAll('#tbody tr:not(.desc-row)');
-  var vis=0;
-  rows.forEach(function(tr){{
-    var text=tr.textContent.toLowerCase();
-    var show=!q||text.indexOf(q)>=0;
-    tr.style.display=show?'':'none';
-    var next=tr.nextElementSibling;
-    if(next&&next.classList.contains('desc-row'))next.style.display='none';
-    if(show)vis++;
+    filters = '<input type="text" id="qs" placeholder="Search conditions\u2026" oninput="fil()">'
+    data_js = json.dumps(rows, ensure_ascii=False)
+    js = f"""const DATA={data_js};
+let F=DATA.slice(),open=-1;
+const SK=[r=>r.n,r=>r.sum];
+{JS_SORT}
+function render(){{
+  const h=[];
+  F.forEach((r,i)=>{{
+    h.push(`<tr onclick="tog(${{i}})"${{open===i?' class="active"':''}}>`+
+      `<td style="width:160px;font-weight:600">${{esc(r.n)}}</td>`+
+      `<td style="font-size:13px;color:#aaa">${{esc(r.sum)}}</td></tr>`);
+    h.push(`<tr class="desc-row" style="display:${{open===i?'':'none'}}"><td colspan="2">`+
+      `<div class="desc-content">${{esc(r.desc||r.sum)}}</div></td></tr>`);
   }});
-  document.getElementById('cnt').textContent=vis+' conditions';
+  document.getElementById('tb').innerHTML=h.join('');
+  document.getElementById('cnt').textContent=F.length+'/'+DATA.length;
 }}
-applyFilters();
-</script>
-'''
-    (OUT / 'conditions.html').write_text(html, encoding='utf-8')
-    print(f"  conditions.html — {len(conditions)} conditions, {len(html)//1024} KB")
+function tog(i){{open=open===i?-1:i;render();}}
+function fil(){{
+  const q=document.getElementById('qs').value.toLowerCase();
+  F=DATA.filter(r=>(!q||(r.n+' '+r.sum+' '+r.desc).toLowerCase().includes(q)));
+  open=-1;render();
+}}
+render();"""
 
+    return page(
+        'Conditions \u2014 5e Reference', '\u26a1',
+        filters,
+        th(['Condition','Summary (click to expand)']),
+        js
+    )
 
-# ─── 6. BACKGROUNDS ───────────────────────────────────────────────────────────
+# ─── 6. backgrounds ────────────────────────────────────────────────────────
 
 def build_backgrounds():
-    print("Building backgrounds.html...")
-    rows = load_all('background_*.rpg.json')
+    files = sorted(glob.glob(str(DATA_DIR / 'background_*.rpg.json')))
+    rows = []
     sources = set()
-    all_rows = []
 
-    for d in rows:
-        s = d['stats']
-        name   = sv(s,'name') or ''
-        source = (sv(s,'source') or 'PHB').upper()
-        sources.add(source)
+    for fp in files:
+        d = load_json(fp)
+        if not d: continue
+        s = d.get('stats', {})
+        name = gv(s, 'name') or ''
+        if not name: continue
+        source = gv(s, 'source') or ''
+        gold   = gv(s, 'gold_pieces') or 0
+
+        # Features (class features embedded in background)
+        feats_val = (s.get('features') or {}).get('value', [])
+        feat_names, feat_descs = [], []
+        for f in feats_val:
+            if not isinstance(f, dict): continue
+            fs     = f.get('stats', {})
+            fname  = (fs.get('name') or {}).get('value', '')
+            if fname: feat_names.append(fname)
+            descs_val = (fs.get('descriptions') or {}).get('value', [])
+            for dd in descs_val:
+                if not isinstance(dd, dict): continue
+                desc = ((dd.get('stats',{}).get('description') or {}).get('value') or '')
+                if desc:
+                    feat_descs.append(f"{fname}:\n{desc}")
+                    break
 
         # Skill proficiencies
-        skills = []
-        sp_list = sv(s,'skill_proficiencies') or []
-        if isinstance(sp_list, list):
-            for sp in sp_list:
-                opts = sp.get('stats',{}).get('options',{}).get('value',[])
-                if isinstance(opts, list):
-                    skills.extend(opts)
-                elif isinstance(opts, str):
-                    skills.append(opts)
-        skills_str = ', '.join(s_.replace('_',' ').title() for s_ in skills[:4]) if skills else '—'
+        skills_val = (s.get('skill_proficiencies') or {}).get('value', [])
+        skill_names = []
+        for sk in skills_val:
+            if not isinstance(sk, dict): continue
+            opts = ((sk.get('stats',{}).get('options') or {}).get('value') or [])
+            if isinstance(opts, list):
+                skill_names.extend(str(o).replace('_',' ').title() for o in opts if isinstance(o, str))
+            elif isinstance(opts, str):
+                skill_names.append(opts.replace('_',' ').title())
 
-        # Tool proficiencies
-        tools = []
-        tp_list = sv(s,'tool_proficiencies') or []
-        if isinstance(tp_list, list):
-            for tp in tp_list:
-                opts = tp.get('stats',{}).get('options',{}).get('value',[])
-                if isinstance(opts, str): tools.append(opts)
-                elif isinstance(opts, list): tools.extend(opts)
-        tools_str = ', '.join(tools[:2]) if tools else '—'
+        sources.add(source)
+        rows.append({
+            'n': name, 'src': source,
+            'gold': int(gold) if gold else 0,
+            'feat': feat_names[0] if feat_names else '\u2014',
+            'skills': ', '.join(skill_names) if skill_names else '\u2014',
+            'desc': '\n\n'.join(feat_descs) if feat_descs else '',
+        })
 
-        # Feature name + description
-        feats_ = sv(s,'features') or []
-        feat_name = ''
-        feat_desc = ''
-        if isinstance(feats_, list) and feats_:
-            fn = feats_[0].get('stats',{}).get('name',{}).get('value','')
-            feat_name = fn or ''
-            descs = feats_[0].get('stats',{}).get('descriptions',{}).get('value',[])
-            if isinstance(descs, list) and descs:
-                feat_desc = descs[0].get('stats',{}).get('description',{}).get('value','') if isinstance(descs[0], dict) else ''
-
-        all_rows.append((name, source, skills_str, tools_str, feat_name, feat_desc))
-
-    tbody = ''
-    for (name, source, skills, tools, feat_name, feat_desc) in sorted(all_rows, key=lambda x: x[0].lower()):
-        dc = f'data-name="{esc(name.lower())}" data-src="{esc(source)}"'
-        tbody += f'<tr {dc} onclick="toggleRow(this)"><td><strong>{esc(name)}</strong></td>'
-        tbody += f'<td style="color:#888;font-size:12px">{esc(source)}</td>'
-        tbody += f'<td style="font-size:12px">{esc(skills)}</td>'
-        tbody += f'<td style="font-size:12px">{esc(tools)}</td>'
-        tbody += f'<td style="font-size:12px;color:#c4b5fd">{esc(feat_name) or nd("—")}</td></tr>'
-        desc_html = ''
-        if feat_name:
-            desc_html += f'<p><strong style="color:#a78bfa">{esc(feat_name)}</strong></p><p>{esc(feat_desc)}</p>'
-        if not desc_html:
-            desc_html = nd('No additional details.')
-        tbody += f'<tr class="desc-row"><td colspan="5"><div class="desc-content">{desc_html}</div></td></tr>'
-
-    src_opts = '\n'.join(f'<option value="{esc(s)}">{esc(s)}</option>' for s in sorted(sources))
-
-    html = page_head('Backgrounds — 5e', '📜', f'{len(all_rows)} backgrounds')
-    html += f'''
-<div class="filters">
-  <input type="text" id="fsearch" placeholder="Search name or feature…" oninput="applyFilters()">
-  <select id="fsrc" onchange="applyFilters()"><option value="">All Sources</option>{src_opts}</select>
-  <span class="count" id="cnt"></span>
-</div>
-<div class="table-wrap">
-<table><thead><tr>
-  <th onclick="sortBy(0)">Background</th>
-  <th onclick="sortBy(1)">Source</th>
-  <th onclick="sortBy(2)">Skills</th>
-  <th onclick="sortBy(3)">Tool Prof.</th>
-  <th onclick="sortBy(4)">Feature</th>
-</tr></thead><tbody id="tbody">{tbody}</tbody></table>
-</div>
-<script>
-{SORT_JS}
-function applyFilters(){{
-  var q=(document.getElementById('fsearch').value||'').toLowerCase();
-  var fs=document.getElementById('fsrc').value;
-  var rows=document.querySelectorAll('#tbody tr:not(.desc-row)');
-  var vis=0;
-  rows.forEach(function(tr){{
-    var nm=tr.getAttribute('data-name')||'';
-    var sr=tr.getAttribute('data-src')||'';
-    var text=tr.textContent.toLowerCase();
-    var show=(!q||nm.indexOf(q)>=0||text.indexOf(q)>=0)&&(!fs||sr===fs);
-    tr.style.display=show?'':'none';
-    var next=tr.nextElementSibling;
-    if(next&&next.classList.contains('desc-row'))next.style.display='none';
-    if(show)vis++;
+    src_opts = ''.join(f'<option value="{s}">{s.upper()}</option>' for s in sorted(sources))
+    filters = (
+        f'<input type="text" id="qs" placeholder="Search backgrounds\u2026" oninput="fil()">'
+        f'<label>Source<select id="fsr" onchange="fil()"><option value="">All Sources</option>{src_opts}</select></label>'
+    )
+    data_js = json.dumps(rows, ensure_ascii=False)
+    js = f"""const DATA={data_js};
+let F=DATA.slice(),open=-1;
+const SK=[r=>r.n,r=>r.src,r=>r.feat,r=>r.skills,r=>r.gold];
+{JS_SORT}
+function render(){{
+  const h=[];
+  F.forEach((r,i)=>{{
+    h.push(`<tr onclick="tog(${{i}})"${{open===i?' class="active"':''}}>`+
+      `<td>${{esc(r.n)}}</td><td>${{esc(r.src).toUpperCase()}}</td>`+
+      `<td>${{esc(r.feat)}}</td><td style="font-size:12px">${{esc(r.skills)}}</td>`+
+      `<td>${{r.gold||'\u2014'}} gp</td></tr>`);
+    h.push(`<tr class="desc-row" style="display:${{open===i?'':'none'}}"><td colspan="5">`+
+      `<div class="desc-content">${{esc(r.desc||'No description available.')}}</div></td></tr>`);
   }});
-  document.getElementById('cnt').textContent=vis+' backgrounds';
+  document.getElementById('tb').innerHTML=h.join('');
+  document.getElementById('cnt').textContent=F.length+'/'+DATA.length;
 }}
-applyFilters();
-</script>
-'''
-    (OUT / 'backgrounds.html').write_text(html, encoding='utf-8')
-    print(f"  backgrounds.html — {len(all_rows)} backgrounds, {len(html)//1024} KB")
+function tog(i){{open=open===i?-1:i;render();}}
+function fil(){{
+  const q=document.getElementById('qs').value.toLowerCase();
+  const fs=document.getElementById('fsr').value;
+  F=DATA.filter(r=>
+    (!q||(r.n+' '+r.feat+' '+r.skills).toLowerCase().includes(q))&&
+    (!fs||r.src===fs));
+  open=-1;render();
+}}
+render();"""
 
+    return page(
+        'Backgrounds \u2014 5e Reference', '\U0001f4dc',
+        filters,
+        th(['Name','Source','Feature','Skill Proficiencies','Starting Gold']),
+        js
+    )
 
-# ─── 7. RACES ─────────────────────────────────────────────────────────────────
+# ─── 7. races ──────────────────────────────────────────────────────────────
 
 def build_races():
-    print("Building races.html...")
-    rows = load_all('race_*.rpg.json')
+    files = sorted(glob.glob(str(DATA_DIR / 'race_*.rpg.json')))
+    rows = []
     sources = set()
-    all_rows = []
 
-    for d in rows:
-        s = d['stats']
-        name    = sv(s,'name') or ''
-        source  = (sv(s,'source') or 'PHB').upper()
-        sources.add(source)
+    for fp in files:
+        d = load_json(fp)
+        if not d: continue
+        s = d.get('stats', {})
+        name = gv(s, 'name') or ''
+        if not name: continue
+        source = gv(s, 'source') or ''
+        speed  = int(gv(s, 'speed') or 30)
+        fly    = int(gv(s, 'fly_speed') or 0)
+        swim   = int(gv(s, 'swim_speed') or 0)
+        climb  = int(gv(s, 'climb_speed') or 0)
+        size   = gv(s, 'size') or ''
 
-        # Ability score increases (list of options)
-        asi_list = sv(s,'ability_score_increases') or []
-        asi_parts = []
-        if isinstance(asi_list, list):
-            for asi in asi_list[:3]:
-                opts = asi.get('stats',{}).get('modifier_options',{}).get('value',[])
-                mod  = asi.get('stats',{}).get('modifier',{}).get('value','')
-                if isinstance(opts, list) and opts:
-                    short = '/'.join(o[:3].upper() for o in opts[:2])
-                    asi_parts.append(f"{short} +{mod}" if mod else short)
-        asi_str = ', '.join(asi_parts) if asi_parts else '—'
+        sp_parts = [f"{speed} ft"]
+        if fly:   sp_parts.append(f"fly {fly} ft")
+        if swim:  sp_parts.append(f"swim {swim} ft")
+        if climb: sp_parts.append(f"climb {climb} ft")
+        speed_str = ', '.join(sp_parts)
+
+        # ASIs
+        asis_val = (s.get('ability_score_increases') or {}).get('value', [])
+        asi_strs = []
+        for a in asis_val:
+            if not isinstance(a, dict): continue
+            av = ((a.get('stats',{}).get('value') or {}).get('value') or 0)
+            opts = ((a.get('stats',{}).get('modifier_options') or {}).get('value') or [])
+            if av and opts and isinstance(opts, list):
+                asi_strs.append(f"+{av} {'/'.join(str(o).title() for o in opts)}")
 
         # Traits
-        trait_list = sv(s,'traits') or []
-        trait_names = []
-        trait_details = []
-        if isinstance(trait_list, list):
-            for t in trait_list:
-                tn = t.get('stats',{}).get('name',{}).get('value','')
-                if tn: trait_names.append(tn)
-                descs = t.get('stats',{}).get('descriptions',{}).get('value',[])
-                if isinstance(descs, list) and descs:
-                    td = descs[0].get('stats',{}).get('description',{}).get('value','') if isinstance(descs[0], dict) else ''
-                    if tn and td:
-                        trait_details.append(f"<p><strong style='color:#a78bfa'>{esc(tn)}</strong><br>{esc(td)}</p>")
-        traits_str = ', '.join(trait_names[:4]) if trait_names else '—'
-        if len(trait_names) > 4: traits_str += f' +{len(trait_names)-4} more'
+        traits_val = (s.get('traits') or {}).get('value', [])
+        trait_names, trait_descs = [], []
+        for t in traits_val:
+            if not isinstance(t, dict): continue
+            ts    = t.get('stats', {})
+            tname = (ts.get('name') or {}).get('value', '')
+            if tname: trait_names.append(tname)
+            descs_val = (ts.get('descriptions') or {}).get('value', [])
+            for dd in descs_val:
+                if not isinstance(dd, dict): continue
+                desc = ((dd.get('stats',{}).get('description') or {}).get('value') or '')
+                if desc:
+                    trait_descs.append(f"{tname}:\n{desc}")
+                    break
 
-        # Subraces
-        sub_list = sv(s,'subraces') or []
-        sub_count = len(sub_list) if isinstance(sub_list, list) else 0
-        sub_names = []
-        if isinstance(sub_list, list):
-            for sub in sub_list:
-                sn = sub.get('stats',{}).get('name',{}).get('value','')
-                if sn: sub_names.append(sn)
+        sources.add(source)
+        rows.append({
+            'n': name, 'src': source,
+            'sz': size.title() if size else '\u2014',
+            'sp': speed_str,
+            'asi': ', '.join(asi_strs) if asi_strs else '\u2014',
+            'traits': ', '.join(trait_names) if trait_names else '\u2014',
+            'desc': '\n\n'.join(trait_descs) if trait_descs else '',
+        })
 
-        all_rows.append((name, source, asi_str, traits_str, sub_count,
-                         '\n'.join(trait_details), sub_names))
-
-    tbody = ''
-    for (name, source, asi, traits, sub_count, detail_html, sub_names) in sorted(all_rows, key=lambda x: x[0].lower()):
-        dc = f'data-name="{esc(name.lower())}" data-src="{esc(source)}"'
-        tbody += f'<tr {dc} onclick="toggleRow(this)"><td><strong>{esc(name)}</strong></td>'
-        tbody += f'<td style="color:#888;font-size:12px">{esc(source)}</td>'
-        tbody += f'<td style="font-size:12px;color:#bbb">{esc(asi)}</td>'
-        tbody += f'<td style="font-size:12px">{esc(traits)}</td>'
-        tbody += f'<td style="color:#888">{sub_count if sub_count else nd("—")}</td></tr>'
-        dh = detail_html or ''
-        if sub_names:
-            dh += f'<p style="margin-top:8px"><strong style="color:#a78bfa">Subraces:</strong> {esc(", ".join(sub_names))}</p>'
-        if not dh:
-            dh = '<p style="color:#555">No additional details.</p>'
-        tbody += f'<tr class="desc-row"><td colspan="5"><div class="desc-content">{dh}</div></td></tr>'
-
-    src_opts = '\n'.join(f'<option value="{esc(s)}">{esc(s)}</option>' for s in sorted(sources))
-
-    html = page_head('Races — 5e', '🧝', f'{len(all_rows)} races & subraces')
-    html += f'''
-<div class="filters">
-  <input type="text" id="fsearch" placeholder="Search name or trait…" oninput="applyFilters()">
-  <select id="fsrc" onchange="applyFilters()"><option value="">All Sources</option>{src_opts}</select>
-  <span class="count" id="cnt"></span>
-</div>
-<div class="table-wrap">
-<table><thead><tr>
-  <th onclick="sortBy(0)">Race</th>
-  <th onclick="sortBy(1)">Source</th>
-  <th onclick="sortBy(2)">ASI</th>
-  <th onclick="sortBy(3)">Key Traits</th>
-  <th onclick="sortBy(4)"># Subraces</th>
-</tr></thead><tbody id="tbody">{tbody}</tbody></table>
-</div>
-<script>
-{SORT_JS}
-function applyFilters(){{
-  var q=(document.getElementById('fsearch').value||'').toLowerCase();
-  var fs=document.getElementById('fsrc').value;
-  var rows=document.querySelectorAll('#tbody tr:not(.desc-row)');
-  var vis=0;
-  rows.forEach(function(tr){{
-    var nm=tr.getAttribute('data-name')||'';
-    var sr=tr.getAttribute('data-src')||'';
-    var text=tr.textContent.toLowerCase();
-    var show=(!q||nm.indexOf(q)>=0||text.indexOf(q)>=0)&&(!fs||sr===fs);
-    tr.style.display=show?'':'none';
-    var next=tr.nextElementSibling;
-    if(next&&next.classList.contains('desc-row'))next.style.display='none';
-    if(show)vis++;
+    src_opts = ''.join(f'<option value="{s}">{s.upper()}</option>' for s in sorted(sources))
+    filters = (
+        f'<input type="text" id="qs" placeholder="Search races, traits\u2026" oninput="fil()">'
+        f'<label>Source<select id="fsr" onchange="fil()"><option value="">All Sources</option>{src_opts}</select></label>'
+    )
+    data_js = json.dumps(rows, ensure_ascii=False)
+    js = f"""const DATA={data_js};
+let F=DATA.slice(),open=-1;
+const SK=[r=>r.n,r=>r.src,r=>r.sz,r=>r.sp,r=>r.asi,r=>r.traits];
+{JS_SORT}
+function render(){{
+  const h=[];
+  F.forEach((r,i)=>{{
+    h.push(`<tr onclick="tog(${{i}})"${{open===i?' class="active"':''}}>`+
+      `<td>${{esc(r.n)}}</td><td>${{esc(r.src).toUpperCase()}}</td>`+
+      `<td>${{esc(r.sz)}}</td><td>${{esc(r.sp)}}</td>`+
+      `<td style="font-size:12px">${{esc(r.asi)}}</td>`+
+      `<td style="font-size:12px">${{esc(r.traits)}}</td></tr>`);
+    h.push(`<tr class="desc-row" style="display:${{open===i?'':'none'}}"><td colspan="6">`+
+      `<div class="desc-content">${{esc(r.desc||r.traits)}}</div></td></tr>`);
   }});
-  document.getElementById('cnt').textContent=vis+' races';
+  document.getElementById('tb').innerHTML=h.join('');
+  document.getElementById('cnt').textContent=F.length+'/'+DATA.length;
 }}
-applyFilters();
-</script>
-'''
-    (OUT / 'races.html').write_text(html, encoding='utf-8')
-    print(f"  races.html — {len(all_rows)} races, {len(html)//1024} KB")
+function tog(i){{open=open===i?-1:i;render();}}
+function fil(){{
+  const q=document.getElementById('qs').value.toLowerCase();
+  const fs=document.getElementById('fsr').value;
+  F=DATA.filter(r=>
+    (!q||(r.n+' '+r.traits+' '+r.asi).toLowerCase().includes(q))&&
+    (!fs||r.src===fs));
+  open=-1;render();
+}}
+render();"""
 
+    return page(
+        'Races \u2014 5e Reference', '\U0001f9dd',
+        filters,
+        th(['Name','Source','Size','Speed','Ability Score Increase','Racial Traits']),
+        js
+    )
 
-# ─── 8. CLASSES ───────────────────────────────────────────────────────────────
+# ─── 8. classes ────────────────────────────────────────────────────────────
 
 def build_classes():
-    print("Building classes.html...")
-    rows = load_all('class_*.rpg.json')
-    all_rows = []
+    files = sorted(glob.glob(str(DATA_DIR / 'class_*.rpg.json')))
+    rows = []
+    sources = set()
 
-    for d in rows:
-        s = d['stats']
-        name    = sv(s,'name') or ''
-        source  = (sv(s,'source') or 'PHB').upper()
-        hit_die = sv(s,'hit_die') or '—'
-        spell_ab = sv(s,'spellcasting_ability') or '—'
-        if spell_ab != '—': spell_ab = spell_ab.title()
+    for fp in files:
+        d = load_json(fp)
+        if not d: continue
+        s = d.get('stats', {})
+        name = gv(s, 'name') or ''
+        if not name: continue
+        source   = gv(s, 'source') or ''
+        hit_die  = gv(s, 'hit_die') or ''
+        spell_ab = gv(s, 'spellcasting_ability') or ''
 
-        # Saving throws from proficiency fields
+        # Saving throw proficiencies -> hints at primary ability
         saves = []
-        for stat in ['strength','dexterity','constitution','intelligence','wisdom','charisma']:
-            if sv(s, f'{stat}_saving_throw_proficiency'):
-                saves.append(stat[:3].upper())
-        saves_str = ', '.join(saves) if saves else '—'
+        for ab in ['strength','dexterity','constitution','intelligence','wisdom','charisma']:
+            if gv(s, f'{ab}_saving_throw_proficiency'):
+                saves.append(ab.title())
+
+        primary = spell_ab.title() if spell_ab else (', '.join(saves[:2]) if saves else '\u2014')
 
         # Archetypes / subclasses
-        arc_list = sv(s,'archetypes') or []
-        arc_names = []
-        if isinstance(arc_list, list):
-            for arc in arc_list:
-                an = arc.get('stats',{}).get('name',{}).get('value','')
-                if an: arc_names.append(an)
-        arc_count = len(arc_names)
+        archetypes_val = (s.get('archetypes') or {}).get('value', [])
+        sub_names = []
+        if isinstance(archetypes_val, list):
+            for a in archetypes_val:
+                if isinstance(a, dict):
+                    an = ((a.get('stats',{}).get('name') or {}).get('value') or '')
+                    if an: sub_names.append(an)
 
-        # Primary ability (from hp_modifiers or best guess)
-        hp_mods = sv(s,'hp_modifiers') or []
-        hp_mod_str = ', '.join(hp_mods).title() if isinstance(hp_mods, list) else '—'
+        # Features
+        feats_val = (s.get('features') or {}).get('value', [])
+        feat_names = []
+        for f in feats_val:
+            if isinstance(f, dict):
+                fn = ((f.get('stats',{}).get('name') or {}).get('value') or '')
+                if fn: feat_names.append(fn)
 
-        all_rows.append((name, source, hit_die, spell_ab, saves_str, arc_count, arc_names))
+        desc_parts = []
+        if sub_names:
+            desc_parts.append(f"Subclasses ({len(sub_names)}):\n{', '.join(sub_names)}")
+        if feat_names:
+            desc_parts.append(f"Class Features:\n{', '.join(feat_names)}")
 
-    tbody = ''
-    for (name, source, hit_die, spell_ab, saves, arc_count, arc_names) in sorted(all_rows, key=lambda x: x[0].lower()):
-        tbody += f'<tr onclick="toggleRow(this)"><td><strong>{esc(name)}</strong></td>'
-        tbody += f'<td style="color:#888;font-size:12px">{esc(source)}</td>'
-        tbody += f'<td style="color:#a78bfa">{esc(hit_die)}</td>'
-        tbody += f'<td style="font-size:12px">{esc(spell_ab)}</td>'
-        tbody += f'<td style="font-size:12px">{esc(saves)}</td>'
-        tbody += f'<td style="color:#888">{arc_count if arc_count else nd("—")}</td></tr>'
-        arc_html = ''
-        if arc_names:
-            arc_html = '<p><strong style="color:#a78bfa">Subclasses:</strong><br>' + esc(', '.join(arc_names)) + '</p>'
-        else:
-            arc_html = '<p style="color:#555">No subclasses in dataset.</p>'
-        tbody += f'<tr class="desc-row"><td colspan="6"><div class="desc-content">{arc_html}</div></td></tr>'
+        sources.add(source)
+        rows.append({
+            'n': name, 'src': source, 'hd': hit_die, 'prim': primary,
+            'nsub': len(sub_names), 'subs': sub_names,
+            'desc': '\n\n'.join(desc_parts) if desc_parts else '',
+        })
 
-    html = page_head('Classes — 5e', '⚡', f'{len(all_rows)} classes')
-    html += f'''
-<div class="filters">
-  <input type="text" id="fsearch" placeholder="Search class name…" oninput="applyFilters()">
-  <span class="count" id="cnt"></span>
-</div>
-<div class="table-wrap">
-<table><thead><tr>
-  <th onclick="sortBy(0)">Class</th>
-  <th onclick="sortBy(1)">Source</th>
-  <th onclick="sortBy(2)">Hit Die</th>
-  <th onclick="sortBy(3)">Spellcasting</th>
-  <th onclick="sortBy(4)">Saving Throws</th>
-  <th onclick="sortBy(5)"># Subclasses</th>
-</tr></thead><tbody id="tbody">{tbody}</tbody></table>
-</div>
-<script>
-{SORT_JS}
-function applyFilters(){{
-  var q=(document.getElementById('fsearch').value||'').toLowerCase();
-  var rows=document.querySelectorAll('#tbody tr:not(.desc-row)');
-  var vis=0;
-  rows.forEach(function(tr){{
-    var text=tr.textContent.toLowerCase();
-    var show=!q||text.indexOf(q)>=0;
-    tr.style.display=show?'':'none';
-    var next=tr.nextElementSibling;
-    if(next&&next.classList.contains('desc-row'))next.style.display='none';
-    if(show)vis++;
+    src_opts = ''.join(f'<option value="{s}">{s.upper()}</option>' for s in sorted(sources))
+    filters = (
+        f'<input type="text" id="qs" placeholder="Search classes\u2026" oninput="fil()">'
+        f'<label>Source<select id="fsr" onchange="fil()"><option value="">All Sources</option>{src_opts}</select></label>'
+    )
+    data_js = json.dumps(rows, ensure_ascii=False)
+    js = f"""const DATA={data_js};
+let F=DATA.slice(),open=-1;
+const SK=[r=>r.n,r=>r.src,r=>r.hd,r=>r.prim,r=>r.nsub];
+{JS_SORT}
+function render(){{
+  const h=[];
+  F.forEach((r,i)=>{{
+    h.push(`<tr onclick="tog(${{i}})"${{open===i?' class="active"':''}}>`+
+      `<td>${{esc(r.n)}}</td><td>${{esc(r.src).toUpperCase()}}</td>`+
+      `<td>${{esc(r.hd||'\u2014')}}</td><td>${{esc(r.prim)}}</td>`+
+      `<td>${{r.nsub}}</td></tr>`);
+    h.push(`<tr class="desc-row" style="display:${{open===i?'':'none'}}"><td colspan="5">`+
+      `<div class="desc-content">${{esc(r.desc||'\u2014')}}</div></td></tr>`);
   }});
-  document.getElementById('cnt').textContent=vis+' classes';
+  document.getElementById('tb').innerHTML=h.join('');
+  document.getElementById('cnt').textContent=F.length+'/'+DATA.length;
 }}
-applyFilters();
-</script>
-'''
-    (OUT / 'classes.html').write_text(html, encoding='utf-8')
-    print(f"  classes.html — {len(all_rows)} classes, {len(html)//1024} KB")
+function tog(i){{open=open===i?-1:i;render();}}
+function fil(){{
+  const q=document.getElementById('qs').value.toLowerCase();
+  const fs=document.getElementById('fsr').value;
+  F=DATA.filter(r=>
+    (!q||(r.n+' '+r.prim+' '+r.hd).toLowerCase().includes(q))&&
+    (!fs||r.src===fs));
+  open=-1;render();
+}}
+render();"""
 
+    return page(
+        'Classes \u2014 5e Reference', '\U0001f4da',
+        filters,
+        th(['Name','Source','Hit Die','Primary Ability','# Subclasses']),
+        js
+    )
 
-# ─── Update index.html ────────────────────────────────────────────────────────
+# ─── run all ───────────────────────────────────────────────────────────────
 
-def update_index():
-    print("Updating index.html...")
-    idx = (OUT / 'index.html').read_text(encoding='utf-8')
-
-    new_cards = '''
-    <div class="card">
-      <div class="card-header">
-        <span class="card-icon">🐉</span>
-        <span class="card-title">Monsters</span>
-      </div>
-      <div class="card-body">
-        <p class="card-desc">1,400+ monsters with CR, AC, HP, speed, ability scores, and type filters. Paginated for performance.</p>
-        <a class="btn btn-primary" href="monsters.html">Monster Reference</a>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="card-header">
-        <span class="card-icon">⚔️</span>
-        <span class="card-title">Weapons</span>
-      </div>
-      <div class="card-body">
-        <p class="card-desc">All weapons with damage, properties, cost, and weight. Filter by Simple/Martial and type.</p>
-        <a class="btn btn-primary" href="weapons.html">Weapon Reference</a>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="card-header">
-        <span class="card-icon">🛡️</span>
-        <span class="card-title">Armor</span>
-      </div>
-      <div class="card-body">
-        <p class="card-desc">All armor with base AC, STR requirement, stealth disadvantage, cost, and weight.</p>
-        <a class="btn btn-primary" href="armor.html">Armor Reference</a>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="card-header">
-        <span class="card-icon">💎</span>
-        <span class="card-title">Items &amp; Equipment</span>
-      </div>
-      <div class="card-body">
-        <p class="card-desc">700+ items with rarity, magic, attunement, and curse filters. Click to expand descriptions.</p>
-        <a class="btn btn-primary" href="items.html">Item Reference</a>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="card-header">
-        <span class="card-icon">⚠️</span>
-        <span class="card-title">Conditions</span>
-      </div>
-      <div class="card-body">
-        <p class="card-desc">All 15 standard 5e conditions with full descriptions from the SRD. Click to expand.</p>
-        <a class="btn btn-primary" href="conditions.html">Conditions Reference</a>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="card-header">
-        <span class="card-icon">📜</span>
-        <span class="card-title">Backgrounds</span>
-      </div>
-      <div class="card-body">
-        <p class="card-desc">All backgrounds with skill proficiencies, tool proficiencies, and feature names.</p>
-        <a class="btn btn-primary" href="backgrounds.html">Backgrounds Reference</a>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="card-header">
-        <span class="card-icon">🧝</span>
-        <span class="card-title">Races</span>
-      </div>
-      <div class="card-body">
-        <p class="card-desc">All races with ability score increases, traits, and subraces. Click to expand trait details.</p>
-        <a class="btn btn-primary" href="races.html">Races Reference</a>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="card-header">
-        <span class="card-icon">⚡</span>
-        <span class="card-title">Classes</span>
-      </div>
-      <div class="card-body">
-        <p class="card-desc">All classes with hit die, spellcasting ability, saving throws, and subclass list.</p>
-        <a class="btn btn-primary" href="classes.html">Classes Reference</a>
-      </div>
-    </div>'''
-
-    # Insert before closing </div> of .grid
-    if new_cards.strip() not in idx:
-        idx = idx.replace('  </div>\n</body>', new_cards + '\n\n  </div>\n</body>')
-        (OUT / 'index.html').write_text(idx, encoding='utf-8')
-        print("  index.html updated with 8 new cards")
-    else:
-        print("  index.html already has new cards, skipping")
-
-
-# ─── Main ─────────────────────────────────────────────────────────────────────
+PAGES = [
+    ('monsters.html',    build_monsters),
+    ('weapons.html',     build_weapons),
+    ('armor.html',       build_armor),
+    ('items.html',       build_items),
+    ('conditions.html',  build_conditions),
+    ('backgrounds.html', build_backgrounds),
+    ('races.html',       build_races),
+    ('classes.html',     build_classes),
+]
 
 if __name__ == '__main__':
-    build_monsters()
-    build_weapons()
-    build_armor()
-    build_items()
-    build_conditions()
-    build_backgrounds()
-    build_races()
-    build_classes()
-    update_index()
-    print("\nDone! All 8 pages generated.")
+    print(f"Output dir: {BASE}\n")
+    for fname, fn in PAGES:
+        print(f"Building {fname}...")
+        try:
+            html = fn()
+            out  = BASE / fname
+            out.write_text(html, encoding='utf-8')
+            size = out.stat().st_size
+            print(f"  \u2713 {fname}: {size:,} bytes")
+        except Exception as e:
+            import traceback
+            print(f"  \u2717 {fname}: {e}")
+            traceback.print_exc()
+    print("\nDone!")
